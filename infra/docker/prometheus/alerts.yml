@@ -1,0 +1,105 @@
+groups:
+  - name: travel_agent_alerts
+    interval: 30s
+    rules:
+      # 应用健康检查
+      - alert: ApplicationDown
+        expr: up{job="travel-agent"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Travel Agent application is down"
+          description: "Application {{ $labels.instance }} has been down for more than 1 minute"
+      
+      # Agent 执行失败率过高
+      - alert: HighAgentFailureRate
+        expr: |
+          rate(agent_execution_failure_total[5m]) / 
+          rate(agent_execution_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High agent execution failure rate"
+          description: "Agent failure rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+      
+      # LLM 调用失败率过高
+      - alert: HighLLMFailureRate
+        expr: |
+          rate(llm_call_failure_total[5m]) / 
+          rate(llm_call_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High LLM call failure rate"
+          description: "LLM failure rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+      
+      # Agent 执行时间过长
+      - alert: SlowAgentExecution
+        expr: |
+          histogram_quantile(0.95, 
+            rate(agent_execution_duration_seconds_bucket[5m])
+          ) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow agent execution"
+          description: "95th percentile of agent execution time is {{ $value }}s"
+      
+      # JVM 内存使用率过高
+      - alert: HighMemoryUsage
+        expr: |
+          (jvm_memory_used_bytes{area="heap"} / 
+           jvm_memory_max_bytes{area="heap"}) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High JVM memory usage"
+          description: "JVM heap memory usage is {{ $value | humanizePercentage }}"
+      
+      # CPU 使用率过高
+      - alert: HighCPUUsage
+        expr: system_cpu_usage > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value | humanizePercentage }}"
+      
+      # Token 消耗异常
+      - alert: HighTokenConsumption
+        expr: |
+          rate(llm_tokens_total_total[1h]) > 100000
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "High token consumption"
+          description: "Token consumption rate is {{ $value }} tokens/second"
+      
+      # 知识库文档数量为0
+      - alert: EmptyKnowledgeBase
+        expr: knowledge_base_documents == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Knowledge base is empty"
+          description: "No documents found in knowledge base"
+      
+      # HTTP 请求错误率过高
+      - alert: HighHTTPErrorRate
+        expr: |
+          rate(http_server_requests_seconds_count{status=~"5.."}[5m]) / 
+          rate(http_server_requests_seconds_count[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP error rate"
+          description: "HTTP 5xx error rate is {{ $value | humanizePercentage }}"

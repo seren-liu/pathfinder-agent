@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.agent.mapper.DestinationFeaturesMapper">
+
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="com.travel.agent.entity.DestinationFeatures">
+        <id column="id" property="id" />
+        <result column="destination_id" property="destinationId" />
+        <result column="feature_name" property="featureName" />
+        <result column="created_at" property="createdAt" />
+    </resultMap>
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        id, destination_id, feature_name, created_at
+    </sql>
+
+</mapper>

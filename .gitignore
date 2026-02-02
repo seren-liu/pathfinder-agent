@@ -1,0 +1,32 @@
+# IDE 配置
+.idea/
+.vscode/
+
+# 编译输出
+target/
+*/target/
+node_modules
+
+# 系统文件
+.DS_Store
+
+# 测试代码（不上传到 GitHub）
+backend/src/test/
+
+# 临时文件
+*.tar.gz
+*.zip
+*.log
+*.tmp
+
+# 敏感配置（本地开发）
+application.yml
+application-local.yml
+application-dev.yml
+.env
+.env.*
+!.env.example
+**/secrets/
+
+# 测试报告（不上传）
+**/test-reports/

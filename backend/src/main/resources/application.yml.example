@@ -1,0 +1,249 @@
+server:
+  port: 8080
+  tomcat:
+    connection-timeout: 10s
+
+# === AWS S3 基础配置 ===
+s3:
+  bucket: your-s3-bucket-name            # 你的 S3 桶名，例如：trip-photos-prod-xyz
+  region: ap-southeast-2
+  access-key-id: YOUR_AWS_ACCESS_KEY_ID
+  secret-access-key: YOUR_AWS_SECRET_ACCESS_KEY   
+
+spring:
+  application:
+    name: travel-agent
+  
+# 数据源配置 (使用PostgreSQL)
+  datasource:
+    url: jdbc:postgresql://localhost:5432/travel_agent
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+  
+# Redis 配置
+  data:
+    redis:
+      host: localhost
+      port: 6379
+  
+  cache:
+    type: redis
+    redis:
+      time-to-live: 86400000  # 24小时缓存
+    cache-names:
+      - trip
+      - latestTrip
+      - nearbyPlaces
+      - placeImage
+      - mapboxGeocode  # 新增：Mapbox 地理编码缓存
+
+# MyBatis-Plus 配置
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.travel.agent.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    # log-impl: org.apache.ibatis.logging.stdout.StdOutImpl  # 已禁用 SQL 日志
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# 日志配置
+logging:
+  level:
+    com.travel.agent: INFO  # 改为 INFO，减少日志输出
+    org.springframework.web: WARN  # 改为 WARN
+    com.zaxxer.hikari: WARN  # 禁用 HikariCP 日志
+    org.mybatis: WARN  # 禁用 MyBatis 日志
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# OpenAI API 配置
+openai:
+  api-key: YOUR_OPENAI_API_KEY  # 从 https://platform.openai.com/api-keys 获取
+  model: gpt-4o-mini
+  base-url: https://api.openai.com/v1
+  timeout: 30000  # 增加到 90秒
+  max-tokens: 5000  # 增加到 5000
+  temperature: 0.7
+
+# Geoapify Places API（保留用于附近地点搜索）
+geoapify:
+  api-key: YOUR_GEOAPIFY_API_KEY  # 从 https://www.geoapify.com/ 获取
+  base-url: https://api.geoapify.com/v2
+  timeout: 10000
+
+# Mapbox API 配置
+mapbox:
+  access-token: YOUR_MAPBOX_ACCESS_TOKEN  # 从 https://account.mapbox.com/ 获取
+  geocoding-url: https://api.mapbox.com/geocoding/v5/mapbox.places
+  timeout: 15000  # 15秒超时
+
+# Google Gemini API 配置
+gemini:
+  api-key: YOUR_GEMINI_API_KEY  # 从 https://aistudio.google.com/app/apikey 获取
+  model: gemini-2.5-flash-lite
+  base-url: https://generativelanguage.googleapis.com/v1beta
+  timeout: 20000  # 20秒超时（Gemini 更快）
+  max-tokens: 8192
+  temperature: 0.7
+
+# AI 服务配置
+ai:
+  primary-provider: gemini  # 主要使用 Gemini（快速）
+  fallback-provider: openai  # OpenAI 作为备用
+  enable-fallback: true  # 启用自动降级
+
+# ==================== LangChain4j 配置 ====================
+langchain4j:
+  # OpenAI 配置
+  open-ai:
+    chat-model:
+      api-key: ${OPENAI_API_KEY:YOUR_OPENAI_API_KEY}
+      model-name: gpt-4o-mini
+      temperature: 0.7
+      max-tokens: 5000
+      timeout: 30s
+    
+    # Embedding 模型配置
+    embedding-model:
+      api-key: ${OPENAI_API_KEY:YOUR_OPENAI_API_KEY}
+      model-name: text-embedding-3-small
+      timeout: 30s
+
+  # 向量数据库配置
+  chroma:
+    base-url: http://localhost:8000
+    collection-name: travel_destinations
+    timeout: 10s
+  
+  # 指定使用JDK HTTP客户端以避免冲突
+  http-client:
+    type: jdk
+    timeout: 10s
+  
+  pgvector:
+    host: localhost
+    port: 5432
+    database: pathfinder_agent
+    user: postgres
+    password: postgres
+    table: embeddings
+    dimension: 1536  # text-embedding-3-small 的维度
+
+# ==================== LangGraph4j 配置 ====================
+langgraph:
+  # Checkpoint 持久化配置
+  checkpoint:
+    type: redis  # 或 memory
+    redis:
+      host: ${spring.data.redis.host}
+      port: ${spring.data.redis.port}
+      ttl: 3600  # 1小时
+  
+  # 可视化配置
+  visualization:
+    enabled: true
+    format: mermaid  # 或 plantuml
+
+# ==================== 向量数据库配置 ====================
+vector:
+  # 主向量数据库
+  primary: chroma  # 或 pgvector
+  
+  # Chroma 配置
+  chroma:
+    url: http://localhost:8000
+    collections:
+      destinations: travel_destinations
+      itineraries: travel_itineraries
+      knowledge: travel_knowledge
+  
+  # pgvector 配置
+  pgvector:
+    enabled: false
+    datasource:
+      url: jdbc:postgresql://localhost:5432/pathfinder_agent
+      username: postgres
+      password: postgres
+
+# 推荐系统配置
+recommendation:
+  version: v2  # v1 或 v2
+  fallback-enabled: true  # 启用降级
+  max-results: 10
+  cache-ttl: 3600  # 1小时缓存
+
+# ==================== Chat Memory 配置 ====================
+chat:
+  memory:
+    store: redis  # redis 或 postgres
+    max-messages: 20
+    expiration-hours: 24
+  fallback-enabled: true  # 启用降级
+
+# ==================== Actuator 监控配置 ====================
+management:
+  endpoints:
+    web:
+      exposure:
+        # 暴露监控端点
+        include: health,info,metrics,prometheus,env,loggers
+      base-path: /actuator
+  
+  endpoint:
+    health:
+      # 显示详细健康信息
+      show-details: always
+      # 启用健康探针
+      probes:
+        enabled: true
+  
+  # Prometheus 指标配置（Spring Boot 3.x 新格式）
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+        # Prometheus 指标格式
+        descriptions: true
+        # 步长（scrape interval）
+        step: 1m
+  
+  # 指标配置
+  metrics:
+    
+    # 启用各类指标
+    enable:
+      jvm: true
+      process: true
+      system: true
+      tomcat: true
+      logback: true
+    
+    # 分布统计配置
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.5, 0.95, 0.99
+      slo:
+        http.server.requests: 100ms, 500ms, 1s, 2s, 5s
+    
+    # 标签配置
+    tags:
+      application: ${spring.application.name}
+      environment: ${spring.profiles.active:default}
+
+# ==================== 应用信息 ====================
+info:
+  app:
+    name: Travel Agent
+    description: AI-powered Travel Planning Agent
+    version: 1.0.0
+    encoding: UTF-8
+    java:
+      version: ${java.version}

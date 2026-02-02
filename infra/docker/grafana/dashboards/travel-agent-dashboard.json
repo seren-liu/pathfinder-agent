@@ -1,0 +1,271 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "travel-agent-main",
+    "title": "Travel Agent Monitoring Dashboard",
+    "tags": ["travel-agent", "monitoring"],
+    "timezone": "browser",
+    "schemaVersion": 16,
+    "version": 1,
+    "refresh": "10s",
+    "panels": [
+      {
+        "id": 1,
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "type": "graph",
+        "title": "Agent Execution Rate",
+        "targets": [
+          {
+            "expr": "rate(agent_execution_total[5m])",
+            "legendFormat": "Execution Rate",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Executions/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 2,
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "type": "gauge",
+        "title": "Agent Success Rate",
+        "targets": [
+          {
+            "expr": "rate(agent_execution_success_total[5m]) / rate(agent_execution_total[5m])",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 0.8, "color": "yellow"},
+                {"value": 0.95, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 3,
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "type": "graph",
+        "title": "Agent Execution Duration (P50/P95/P99)",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(agent_execution_duration_seconds_bucket[5m]))",
+            "legendFormat": "P50",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(agent_execution_duration_seconds_bucket[5m]))",
+            "legendFormat": "P95",
+            "refId": "B"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(agent_execution_duration_seconds_bucket[5m]))",
+            "legendFormat": "P99",
+            "refId": "C"
+          }
+        ],
+        "yaxes": [
+          {"format": "s", "label": "Duration"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 4,
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "type": "stat",
+        "title": "Concurrent Executions",
+        "targets": [
+          {
+            "expr": "agent_execution_concurrent",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "colorMode": "value",
+          "graphMode": "area",
+          "justifyMode": "auto",
+          "orientation": "auto"
+        }
+      },
+      {
+        "id": 5,
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "type": "graph",
+        "title": "LLM Call Rate",
+        "targets": [
+          {
+            "expr": "rate(llm_call_total[5m])",
+            "legendFormat": "Total Calls",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(llm_call_success_total[5m])",
+            "legendFormat": "Success",
+            "refId": "B"
+          },
+          {
+            "expr": "rate(llm_call_failure_total[5m])",
+            "legendFormat": "Failure",
+            "refId": "C"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Calls/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 6,
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "type": "graph",
+        "title": "Token Consumption Rate",
+        "targets": [
+          {
+            "expr": "rate(llm_tokens_total_total[5m])",
+            "legendFormat": "Total Tokens/sec",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(llm_tokens_prompt_total[5m])",
+            "legendFormat": "Prompt Tokens/sec",
+            "refId": "B"
+          },
+          {
+            "expr": "rate(llm_tokens_completion_total[5m])",
+            "legendFormat": "Completion Tokens/sec",
+            "refId": "C"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Tokens/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 7,
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+        "type": "graph",
+        "title": "Tool Call Distribution",
+        "targets": [
+          {
+            "expr": "sum by (tool) (rate(tool_call_total[5m]))",
+            "legendFormat": "{{tool}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Calls/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 8,
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+        "type": "graph",
+        "title": "RAG Search Performance",
+        "targets": [
+          {
+            "expr": "rate(rag_search_total[5m])",
+            "legendFormat": "Search Rate",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(rag_search_duration_seconds_bucket[5m]))",
+            "legendFormat": "P95 Duration",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops"},
+          {"format": "s"}
+        ]
+      },
+      {
+        "id": 9,
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
+        "type": "stat",
+        "title": "Knowledge Base Documents",
+        "targets": [
+          {
+            "expr": "knowledge_base_documents",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "colorMode": "value",
+          "graphMode": "area"
+        }
+      },
+      {
+        "id": 10,
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
+        "type": "stat",
+        "title": "Knowledge Base Segments",
+        "targets": [
+          {
+            "expr": "knowledge_base_segments",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "colorMode": "value",
+          "graphMode": "area"
+        }
+      },
+      {
+        "id": 11,
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 40},
+        "type": "graph",
+        "title": "JVM Memory Usage",
+        "targets": [
+          {
+            "expr": "jvm_memory_used_bytes{area='heap'} / jvm_memory_max_bytes{area='heap'}",
+            "legendFormat": "Heap Usage",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "percentunit", "label": "Usage", "max": 1, "min": 0},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 12,
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 40},
+        "type": "graph",
+        "title": "HTTP Request Rate",
+        "targets": [
+          {
+            "expr": "rate(http_server_requests_seconds_count[5m])",
+            "legendFormat": "Total Requests",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(http_server_requests_seconds_count{status=~'5..'}[5m])",
+            "legendFormat": "5xx Errors",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Requests/sec"},
+          {"format": "short"}
+        ]
+      }
+    ]
+  }
+}

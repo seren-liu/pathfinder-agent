@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.agent.mapper.DestinationsMapper">
+
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="com.travel.agent.entity.Destinations">
+        <id column="id" property="id" />
+        <result column="name" property="name" />
+        <result column="country" property="country" />
+        <result column="state" property="state" />
+        <result column="latitude" property="latitude" />
+        <result column="longitude" property="longitude" />
+        <result column="description" property="description" />
+        <result column="budget_level" property="budgetLevel" />
+        <result column="best_season" property="bestSeason" />
+        <result column="timezone" property="timezone" />
+        <result column="created_at" property="createdAt" />
+    </resultMap>
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        id, name, country, state, latitude, longitude, description, budget_level, best_season, timezone, created_at
+    </sql>
+
+</mapper>

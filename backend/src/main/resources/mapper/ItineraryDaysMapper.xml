@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.agent.mapper.ItineraryDaysMapper">
+
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="com.travel.agent.entity.ItineraryDays">
+        <id column="id" property="id" />
+        <result column="trip_id" property="tripId" />
+        <result column="day_number" property="dayNumber" />
+        <result column="date" property="date" />
+        <result column="theme" property="theme" />
+        <result column="created_at" property="createdAt" />
+    </resultMap>
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        id, trip_id, day_number, date, theme, created_at
+    </sql>
+
+</mapper>

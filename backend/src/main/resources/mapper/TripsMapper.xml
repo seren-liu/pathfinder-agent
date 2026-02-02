@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.agent.mapper.TripsMapper">
+
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="com.travel.agent.entity.Trips">
+        <id column="id" property="id" />
+        <result column="user_id" property="userId" />
+        <result column="destination_id" property="destinationId" />
+        <result column="start_date" property="startDate" />
+        <result column="end_date" property="endDate" />
+        <result column="duration_days" property="durationDays" />
+        <result column="party_size" property="partySize" />
+        <result column="total_budget" property="totalBudget" />
+        <result column="currency" property="currency" />
+        <result column="status" property="status" />
+        <result column="current_version" property="currentVersion" />
+        <result column="created_at" property="createdAt" />
+        <result column="updated_at" property="updatedAt" />
+    </resultMap>
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        id, user_id, destination_id, start_date, end_date, duration_days, party_size, total_budget, currency, status, current_version, created_at, updated_at
+    </sql>
+
+</mapper>

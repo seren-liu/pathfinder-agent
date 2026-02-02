@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.travel.agent.mapper.UserPreferencesMapper">
+
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="com.travel.agent.entity.UserPreferences">
+        <id column="id" property="id" />
+        <result column="user_id" property="userId" />
+        <result column="travel_style" property="travelStyle" />
+        <result column="interests" property="interests" />
+        <result column="budget_preference" property="budgetPreference" />
+        <result column="created_at" property="createdAt" />
+    </resultMap>
+
+    <!-- 通用查询结果列 -->
+    <sql id="Base_Column_List">
+        id, user_id, travel_style, interests, budget_preference, created_at
+    </sql>
+
+</mapper>
