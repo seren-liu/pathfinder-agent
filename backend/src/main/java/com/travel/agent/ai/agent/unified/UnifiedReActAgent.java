@@ -202,12 +202,27 @@ public class UnifiedReActAgent {
         prompt.append("- Has selected destination: ").append(state.getSelectedDestination() != null).append("\n");
         prompt.append("- Has trip generated: ").append(state.getTripId() != null).append("\n\n");
         
-        // 可用工具
+        // 可用工具（清晰描述使用场景，让 LLM 自主判断）
         prompt.append("Available Tools:\n");
-        prompt.append("1. conversation - Use when you need to chat with user to collect more information or provide responses\n");
-        prompt.append("2. recommend_destinations - Use when user needs destination suggestions (intent.needsRecommendation == true)\n");
-        prompt.append("3. generate_itinerary - Use when you have all required info (destination, days, budget) and intent.readyForItinerary == true\n");
-        prompt.append("4. FINISH - Use when task is completed (e.g., trip generated or user just wants to chat)\n\n");
+        prompt.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        prompt.append("1. conversation\n");
+        prompt.append("   Purpose: Chat with user to understand needs and collect travel information\n");
+        prompt.append("   Use when: Need more details, user asks questions, or clarification needed\n\n");
+        
+        prompt.append("2. recommend_destinations\n");
+        prompt.append("   Purpose: Recommend specific CITIES when user mentions a COUNTRY or vague destination\n");
+        prompt.append("   Use when: User says 'Japan', 'France', 'beach vacation', etc. (not specific cities)\n");
+        prompt.append("   Example: User: 'I want to visit Japan' → Recommend: Tokyo, Kyoto, Osaka\n\n");
+        
+        prompt.append("3. generate_itinerary\n");
+        prompt.append("   Purpose: Create detailed day-by-day travel plan\n");
+        prompt.append("   Use when: User specified a CITY + days + budget (all 3 required)\n");
+        prompt.append("   Example: User: 'I want to visit Tokyo for 5 days, budget $2000'\n\n");
+        
+        prompt.append("4. FINISH\n");
+        prompt.append("   Purpose: End the conversation\n");
+        prompt.append("   Use when: Task completed or user just wants to chat\n");
+        prompt.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
         
         // 对话轮次统计
         long conversationCount = history.stream()
@@ -215,15 +230,24 @@ public class UnifiedReActAgent {
             .count();
         prompt.append("- Conversation turns so far: ").append(conversationCount).append("\n\n");
         
-        // 决策规则（更明确和果断）
-        prompt.append("Decision Rules (IMPORTANT - Be decisive, don't chat endlessly):\n");
-        prompt.append("1. If no intent analyzed yet → use 'conversation' (max 1 time)\n");
-        prompt.append("2. If intent.needsRecommendation == true AND has basic info (interests/budget/days) → use 'recommend_destinations' IMMEDIATELY\n");
-        prompt.append("3. If intent.readyForItinerary == true AND has destination → use 'generate_itinerary' IMMEDIATELY\n");
-        prompt.append("4. If trip generated → use 'FINISH'\n");
-        prompt.append("5. If conversation count >= 2 AND intent.needsRecommendation == true → MUST use 'recommend_destinations' (stop chatting!)\n");
-        prompt.append("6. If user just chatting (no travel intent) → use 'conversation' then 'FINISH'\n\n");
-        prompt.append("CRITICAL: After 2 conversation turns, you MUST take action (recommend or generate). Don't keep asking questions!\n\n");
+        // 智能决策指导（基于业务逻辑，但让 LLM 自主推理）
+        prompt.append("\n💡 Decision-Making Guidelines:\n");
+        prompt.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        prompt.append("Business Logic:\n");
+        prompt.append("• COUNTRY → recommend CITIES → user selects → generate itinerary\n");
+        prompt.append("• CITY (with days + budget) → generate itinerary directly\n\n");
+        
+        prompt.append("Analyze the current state:\n");
+        prompt.append("• What did the user specify? (Country? City? Vague description?)\n");
+        prompt.append("• What information is missing? (Days? Budget? Interests?)\n");
+        prompt.append("• What would best serve the user right now?\n\n");
+        
+        prompt.append("Decision Hints:\n");
+        prompt.append("• If destination is a COUNTRY (Japan, France) → likely need city recommendations\n");
+        prompt.append("• If destination is a CITY (Tokyo, Paris) + has days & budget → ready for itinerary\n");
+        prompt.append("• If information incomplete → continue conversation\n");
+        prompt.append("• If user just chatting → engage naturally\n");
+        prompt.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
         
         // 历史记录
         if (!history.isEmpty()) {
@@ -238,28 +262,70 @@ public class UnifiedReActAgent {
             prompt.append("\n");
         }
         
-        // 强制决策逻辑
-        if (conversationCount >= 2 && state.getIntent() != null && 
-            Boolean.TRUE.equals(state.getIntent().getNeedsRecommendation())) {
-            prompt.append("\n⚠️ CRITICAL OVERRIDE: You have already had ").append(conversationCount)
-                  .append(" conversation turns AND intent.needsRecommendation == true.\n");
-            prompt.append("You MUST use 'recommend_destinations' NOW. Do NOT continue chatting!\n\n");
+        // 上下文提示（引导而非强制）
+        if (state.getIntent() != null) {
+            if (Boolean.TRUE.equals(state.getIntent().getNeedsRecommendation())) {
+                prompt.append("\n� Context Note:\n");
+                prompt.append("The intent analysis suggests the user needs destination recommendations.\n");
+                prompt.append("This typically means they mentioned a country or vague destination.\n");
+                prompt.append("Consider using 'recommend_destinations' if appropriate.\n\n");
+            } else if (Boolean.TRUE.equals(state.getIntent().getReadyForItinerary())) {
+                prompt.append("\n� Context Note:\n");
+                prompt.append("The intent analysis suggests the user is ready for itinerary generation.\n");
+                prompt.append("This typically means they specified a city with days and budget.\n");
+                prompt.append("Consider using 'generate_itinerary' if all info is complete.\n\n");
+            }
         }
         
-        prompt.append("What should you do next? Respond with ONLY the tool name (conversation, recommend_destinations, generate_itinerary, or FINISH) and a brief reason.\n");
-        prompt.append("Format: [TOOL_NAME] because [reason]");
+        // 要求智能分析和决策
+        prompt.append("🤔 Your Task:\n");
+        prompt.append("Analyze the conversation context, user's needs, and available information.\n");
+        prompt.append("Think step by step:\n");
+        prompt.append("1. What is the user trying to achieve?\n");
+        prompt.append("2. What information do I have vs. what do I need?\n");
+        prompt.append("3. Which tool would best serve the user right now?\n\n");
+        
+        prompt.append("Respond in this EXACT JSON format:\n");
+        prompt.append("{\n");
+        prompt.append("  \"action\": \"conversation|recommend_destinations|generate_itinerary|FINISH\",\n");
+        prompt.append("  \"reasoning\": \"Your step-by-step analysis of why this action is appropriate\"\n");
+        prompt.append("}\n\n");
+        prompt.append("Output ONLY valid JSON, no other text.");
         
         return prompt.toString();
     }
     
     /**
-     * 解析工具名称
+     * 解析工具名称（支持 JSON 格式和文本格式）
      */
     private String parseToolName(String thought) {
         if (thought == null || thought.trim().isEmpty()) {
             return "conversation";
         }
         
+        // 优先尝试解析 JSON 格式
+        try {
+            // 提取 JSON 部分（可能包含其他文本）
+            String jsonPart = extractJson(thought);
+            if (jsonPart != null) {
+                // 简单的 JSON 解析（提取 action 字段）
+                Pattern actionPattern = Pattern.compile("\"action\"\\s*:\\s*\"([^\"]+)\"");
+                Matcher actionMatcher = actionPattern.matcher(jsonPart);
+                if (actionMatcher.find()) {
+                    String action = actionMatcher.group(1).trim();
+                    log.info("📋 Parsed action from JSON: {}", action);
+                    
+                    // 验证是否为有效的工具名称
+                    if (action.matches("(?i)(conversation|recommend_destinations|generate_itinerary|FINISH)")) {
+                        return "FINISH".equalsIgnoreCase(action) ? "FINISH" : action.toLowerCase();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Failed to parse JSON, falling back to pattern matching", e);
+        }
+        
+        // 回退到正则表达式匹配
         Matcher matcher = TOOL_PATTERN.matcher(thought);
         if (matcher.find()) {
             String tool = matcher.group(1).toLowerCase();
@@ -270,7 +336,23 @@ public class UnifiedReActAgent {
         }
         
         // 默认使用对话工具
+        log.warn("⚠️ Could not parse tool from thought, defaulting to conversation");
         return "conversation";
+    }
+    
+    /**
+     * 从文本中提取 JSON 部分
+     */
+    private String extractJson(String text) {
+        // 查找第一个 { 和最后一个 }
+        int start = text.indexOf('{');
+        int end = text.lastIndexOf('}');
+        
+        if (start >= 0 && end > start) {
+            return text.substring(start, end + 1);
+        }
+        
+        return null;
     }
     
     /**

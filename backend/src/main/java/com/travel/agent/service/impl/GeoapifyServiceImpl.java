@@ -444,7 +444,8 @@ public class GeoapifyServiceImpl implements GeoapifyService {
      * 获取默认图片 URL（占位符）
      */
     private String getDefaultImageUrl(String destinationName) {
-        return "https://via.placeholder.com/600x400/667eea/ffffff?text=" + 
-               destinationName.replace(" ", "+");
+        // 使用 Picsum Photos 生成随机但一致的图片
+        int seed = Math.abs(destinationName.hashCode());
+        return String.format("https://picsum.photos/seed/%s/600/400", seed);
     }
 }

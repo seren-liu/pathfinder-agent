@@ -3,13 +3,6 @@ server:
   tomcat:
     connection-timeout: 10s
 
-# === AWS S3 基础配置 ===
-s3:
-  bucket: your-s3-bucket-name            # 你的 S3 桶名，例如：trip-photos-prod-xyz
-  region: ap-southeast-2
-  access-key-id: YOUR_AWS_ACCESS_KEY_ID
-  secret-access-key: YOUR_AWS_SECRET_ACCESS_KEY   
-
 spring:
   application:
     name: travel-agent

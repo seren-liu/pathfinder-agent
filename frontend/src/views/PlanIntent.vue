@@ -3,10 +3,10 @@
     <div class="intent-container">
     <div class="intent-card">
       <!-- Header -->
-      <div class="card-header">
+      <div v-if="chatMessages.length === 0" class="card-header">
         <el-icon class="header-icon" :size="48"><Compass /></el-icon>
         <h2 class="header-title">Where would you like to travel?</h2>
-        <p class="header-subtitle">{{ chatMessages.length > 0 ? 'Continue chatting or generate recommendations...' : 'Tell me about your dream trip...' }}</p>
+        <p class="header-subtitle">Tell me about your dream trip...</p>
       </div>
 
       <!-- Chat History -->
@@ -161,14 +161,6 @@
               Generate Itinerary
             </el-button>
             
-            <el-button
-              size="large"
-              @click="handleClearChat"
-              :disabled="chatLoading || loading"
-            >
-              <el-icon><RefreshLeft /></el-icon>
-              Start Over
-            </el-button>
           </template>
         </div>
       </el-form>

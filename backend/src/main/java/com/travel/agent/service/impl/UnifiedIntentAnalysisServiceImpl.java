@@ -304,8 +304,16 @@ public class UnifiedIntentAnalysisServiceImpl implements UnifiedIntentAnalysisSe
     
     /**
      * 根据目的地类型更新决策标记
+     * 优化：更智能的决策逻辑，减少不必要的对话轮次
      */
     private void updateDecisionFlags(UnifiedTravelIntent intent, DestinationType destType) {
+        // 检查是否有足够的偏好信息（兴趣、心情等）
+        boolean hasPreferences = (intent.getInterests() != null && !intent.getInterests().isEmpty()) 
+                                || intent.getMood() != null;
+        
+        // 检查是否有基本旅行参数（天数、预算）
+        boolean hasBasicParams = intent.getDays() != null && intent.getBudget() != null;
+        
         switch (destType) {
             case CITY:
                 // 具体城市 - 可以直接生成行程
@@ -319,16 +327,32 @@ public class UnifiedIntentAnalysisServiceImpl implements UnifiedIntentAnalysisSe
             case VAGUE:
                 // 区域/国家/模糊描述 - 需要推荐
                 intent.setIntentType(IntentType.DESTINATION_UNCLEAR);
-                intent.setNeedsRecommendation(true);
-                intent.setReadyForItinerary(false);
+                
+                // 关键优化：如果有偏好信息，立即推荐，不要继续对话
+                if (hasPreferences || hasBasicParams) {
+                    intent.setNeedsRecommendation(true);
+                    intent.setReadyForItinerary(false);
+                } else {
+                    // 缺少偏好信息，需要继续对话
+                    intent.setNeedsRecommendation(false);
+                    intent.setReadyForItinerary(false);
+                }
                 break;
                 
             case UNKNOWN:
             default:
-                // 未知 - 需要更多对话
-                intent.setIntentType(IntentType.DESTINATION_UNCLEAR);
-                intent.setNeedsRecommendation(true);
-                intent.setReadyForItinerary(false);
+                // 未知目的地
+                if (hasPreferences) {
+                    // 有偏好信息，可以基于偏好推荐
+                    intent.setIntentType(IntentType.DESTINATION_UNCLEAR);
+                    intent.setNeedsRecommendation(true);
+                    intent.setReadyForItinerary(false);
+                } else {
+                    // 没有任何信息，需要继续对话
+                    intent.setIntentType(IntentType.CONTINUE_CONVERSATION);
+                    intent.setNeedsRecommendation(false);
+                    intent.setReadyForItinerary(false);
+                }
                 break;
         }
     }

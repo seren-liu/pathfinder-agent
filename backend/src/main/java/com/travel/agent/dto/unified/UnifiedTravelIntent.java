@@ -175,12 +175,12 @@ public class UnifiedTravelIntent implements Serializable {
     // ========== 辅助方法 ==========
     
     /**
-     * 判断是否有足够信息生成行程
+     * 判断是否有足够信息生成行程或推荐
+     * 优化：不再强制要求 CITY 类型，只要有基本信息即可
      */
     public boolean hasEnoughInfoForItinerary() {
         return destination != null 
             && !destination.isEmpty()
-            && destinationType == DestinationType.CITY
             && days != null 
             && days > 0
             && budget != null 
@@ -189,12 +189,22 @@ public class UnifiedTravelIntent implements Serializable {
     
     /**
      * 判断是否需要更多信息
+     * 优化：如果有兴趣和心情，即使缺少目的地也可以推荐
      */
     public boolean needsMoreInfo() {
-        return destination == null 
-            || destination.isEmpty()
-            || days == null 
-            || budget == null;
+        // 如果有兴趣/心情但没有目的地，可以推荐
+        boolean hasPreferences = (interests != null && !interests.isEmpty()) || mood != null;
+        if (hasPreferences && (destination == null || destination.isEmpty())) {
+            return false; // 可以基于偏好推荐
+        }
+        
+        // 如果有目的地，检查是否有天数和预算
+        if (destination != null && !destination.isEmpty()) {
+            return days == null || budget == null;
+        }
+        
+        // 什么都没有，需要更多信息
+        return true;
     }
     
     /**
