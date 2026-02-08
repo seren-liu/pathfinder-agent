@@ -2,7 +2,9 @@ package com.travel.agent.ai.agent.unified;
 
 import com.travel.agent.ai.agent.ActionResult;
 import com.travel.agent.ai.agent.ReActStep;
+import com.travel.agent.config.AgentConfig;
 import com.travel.agent.monitoring.AgentMetricsService;
+import com.travel.agent.security.InputSanitizer;
 import com.travel.agent.service.AIService;
 import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -26,32 +29,138 @@ import java.util.regex.Pattern;
 @Component
 @RequiredArgsConstructor
 public class UnifiedReActAgent {
-    
+
     private final AIService aiService;
     private final ToolRegistry toolRegistry;
     private final AgentMetricsService metricsService;
-    
-    private static final int MAX_ITERATIONS = 15;
+    private final AgentConfig agentConfig;
+    private final InputSanitizer inputSanitizer;
+    private final ExecutorService executorService;
+
     private static final Pattern TOOL_PATTERN = Pattern.compile("(?i)(?:use|call|execute)?\\s*(conversation|recommend_destinations|generate_itinerary|FINISH)", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 构造函数注入（Spring 自动装配）
+     */
+    public UnifiedReActAgent(
+            AIService aiService,
+            ToolRegistry toolRegistry,
+            AgentMetricsService metricsService,
+            AgentConfig agentConfig,
+            InputSanitizer inputSanitizer) {
+        this.aiService = aiService;
+        this.toolRegistry = toolRegistry;
+        this.metricsService = metricsService;
+        this.agentConfig = agentConfig;
+        this.inputSanitizer = inputSanitizer;
+        // 创建专用线程池用于超时控制
+        this.executorService = Executors.newCachedThreadPool(r -> {
+            Thread thread = new Thread(r);
+            thread.setName("agent-executor-" + thread.getId());
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
     
     /**
-     * 执行 ReAct 循环
+     * 执行 ReAct 循环（带超时控制）
      */
     public AgentResponse execute(Long userId, String sessionId, String message) {
-        Timer.Sample sample = metricsService.startAgentExecution();
-        
+        // 1. 输入验证（第一道防线）
+        validateAndSanitizeInput(message);
+
+        // 2. 使用 CompletableFuture 实现超时控制
+        CompletableFuture<AgentResponse> future = CompletableFuture.supplyAsync(
+                () -> executeInternal(userId, sessionId, message),
+                executorService
+        );
+
         try {
-            AgentState state = AgentState.create(userId, sessionId, message);
+            // 等待执行完成，设置总超时时间
+            return future.get(
+                    agentConfig.getExecutionTimeout().toSeconds(),
+                    TimeUnit.SECONDS
+            );
+        } catch (TimeoutException e) {
+            log.error("❌ Agent execution timeout after {}s for session: {}",
+                    agentConfig.getExecutionTimeout().toSeconds(), sessionId);
+            future.cancel(true);  // 取消执行
+            throw new RuntimeException(
+                    String.format("Agent execution timeout after %d seconds",
+                            agentConfig.getExecutionTimeout().toSeconds()),
+                    e
+            );
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Agent execution interrupted", e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            throw new RuntimeException("Agent execution failed", cause);
+        }
+    }
+
+    /**
+     * 验证并净化输入
+     */
+    private void validateAndSanitizeInput(String message) {
+        try {
+            // 1. 长度验证
+            inputSanitizer.validateMessage(
+                    message,
+                    agentConfig.getMessageMinLength(),
+                    agentConfig.getMessageMaxLength()
+            );
+
+            // 2. 恶意内容检测
+            if (agentConfig.isEnableInputSanitization() &&
+                    inputSanitizer.containsMaliciousContent(message)) {
+                log.warn("⚠️ Potentially malicious content detected in message");
+                // 可以选择拒绝或继续（这里选择记录警告后继续）
+            }
+
+        } catch (IllegalArgumentException e) {
+            log.error("❌ Input validation failed: {}", e.getMessage());
+            throw e;
+        }
+    }
+
+    /**
+     * 内部执行方法（实际的 ReAct 循环）
+     */
+    private AgentResponse executeInternal(Long userId, String sessionId, String message) {
+        Timer.Sample sample = metricsService.startAgentExecution();
+
+        try {
+            // 净化用户输入
+            String sanitizedMessage = agentConfig.isEnableInputSanitization()
+                    ? inputSanitizer.sanitizeInput(message)
+                    : message;
+
+            AgentState state = AgentState.create(userId, sessionId, sanitizedMessage);
             List<ReActStep> history = new ArrayList<>();
+
+            // 日志脱敏
+            String logMessage = agentConfig.isEnableLogMasking()
+                    ? inputSanitizer.maskForLog(sanitizedMessage)
+                    : sanitizedMessage;
+            log.info("🚀 UnifiedReActAgent starting for session: {}, message: {}",
+                    sessionId, inputSanitizer.truncate(logMessage, 100));
             
-            log.info("🚀 UnifiedReActAgent starting for session: {}", sessionId);
-            
-            for (int i = 0; i < MAX_ITERATIONS; i++) {
-                log.info("🔄 Iteration {}/{}", i + 1, MAX_ITERATIONS);
-                
-                // 1. Reasoning: Agent 思考下一步
-                String thought = reason(state, history);
-                log.info("💭 Thought: {}", thought);
+            for (int i = 0; i < agentConfig.getMaxIterations(); i++) {
+                log.info("🔄 Iteration {}/{}", i + 1, agentConfig.getMaxIterations());
+
+                // 1. Reasoning: Agent 思考下一步（带超时控制）
+                String thought = reasonWithTimeout(state, history);
+
+                // 日志输出（根据配置决定是否截断）
+                if (agentConfig.isEnableVerboseLogging()) {
+                    log.info("💭 Thought: {}", thought);
+                } else {
+                    log.info("💭 Thought: {}", inputSanitizer.truncate(thought, agentConfig.getPromptLogTruncateLength()));
+                }
                 
                 // 2. Acting: 选择并执行工具
                 ActionResult actionResult = act(state, thought);
@@ -116,6 +225,35 @@ public class UnifiedReActAgent {
     private String reason(AgentState state, List<ReActStep> history) {
         String prompt = buildReasoningPrompt(state, history);
         return aiService.chat(prompt);
+    }
+
+    /**
+     * Reasoning with timeout: 带超时控制的推理
+     */
+    private String reasonWithTimeout(AgentState state, List<ReActStep> history) {
+        CompletableFuture<String> future = CompletableFuture.supplyAsync(
+                () -> reason(state, history),
+                executorService
+        );
+
+        try {
+            return future.get(
+                    agentConfig.getLlmTimeout().toSeconds(),
+                    TimeUnit.SECONDS
+            );
+        } catch (TimeoutException e) {
+            log.error("❌ LLM reasoning timeout after {}s", agentConfig.getLlmTimeout().toSeconds());
+            future.cancel(true);
+            throw new RuntimeException(
+                    String.format("LLM call timeout after %d seconds", agentConfig.getLlmTimeout().toSeconds()),
+                    e
+            );
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("LLM call interrupted", e);
+        } catch (ExecutionException e) {
+            throw new RuntimeException("LLM call failed", e.getCause());
+        }
     }
     
     /**
@@ -183,10 +321,15 @@ public class UnifiedReActAgent {
         StringBuilder prompt = new StringBuilder();
         
         prompt.append("You are a travel planning assistant. Analyze the current state and decide the next action.\n\n");
-        
+
         // 当前状态
         prompt.append("Current State:\n");
-        prompt.append("- User message: \"").append(state.getCurrentMessage()).append("\"\n");
+
+        // ⚠️ 安全: 转义用户输入，防止 Prompt 注入
+        String safeMessage = agentConfig.isEnablePromptInjectionProtection()
+                ? inputSanitizer.escapeForPrompt(state.getCurrentMessage())
+                : state.getCurrentMessage();
+        prompt.append("- User message: \"").append(safeMessage).append("\"\n");
         prompt.append("- Has intent analyzed: ").append(state.getIntent() != null).append("\n");
         
         if (state.getIntent() != null) {
@@ -252,7 +395,7 @@ public class UnifiedReActAgent {
         // 历史记录
         if (!history.isEmpty()) {
             prompt.append("Recent History:\n");
-            int start = Math.max(0, history.size() - 3);
+            int start = Math.max(0, history.size() - agentConfig.getHistoryWindowSize());
             for (int i = start; i < history.size(); i++) {
                 ReActStep step = history.get(i);
                 prompt.append(String.format("  %d. Action: %s → %s\n", 
@@ -399,7 +542,7 @@ public class UnifiedReActAgent {
             }
         }
         
-        return sameActionCount >= 3;
+        return sameActionCount >= agentConfig.getLoopDetectionThreshold();
     }
     
     /**
