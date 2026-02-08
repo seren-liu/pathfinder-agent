@@ -36,6 +36,8 @@
 - **ReAct 决策循环**：UnifiedReActAgent 自主推理与行动，动态选择工具执行
 - **工具编排**：管理对话、推荐、行程生成三大工具，支持工具链式调用
 - **上下文管理**：Redis 持久化对话历史，支持多轮对话与上下文理解
+- **三层超时控制**：Agent 总超时 90s、LLM 超时 20s、工具超时 30s，防止请求卡死
+- **五层安全防护**：输入验证 → 恶意检测 → 内容净化 → Prompt 转义 → 日志脱敏
 
 ### LangGraph 状态机工作流
 - **推荐流程**：5 节点状态机（意图分析 → RAG 检索 → 区域过滤 → AI 排序选择 → 生成推荐理由）
@@ -72,7 +74,7 @@
 | **Java** | 17 | 编程语言 |
 | **LangChain4j** | 1.10.0 | AI 集成框架 |
 | **LangGraph4j** | 1.8.0-beta3 | 状态机工作流 |
-| **MyBatis-Plus** | 3.5.9 | ORM 框架 |
+| **MyBatis-Plus** | 3.5.14 | ORM 框架 |
 | **PostgreSQL** | 14+ | 关系数据库 |
 | **Redis** | 6+ | 缓存 & 会话存储 |
 | **Chroma** | Latest | 向量数据库 |
@@ -84,7 +86,7 @@
 | 技术 | 版本 | 用途 |
 |------|------|------|
 | **Vue** | 3.x | 前端框架 |
-| **Vite** | 5.x | 构建工具 |
+| **Vite** | 7.x | 构建工具 |
 | **Element Plus** | Latest | UI 组件库 |
 | **Pinia** | Latest | 状态管理 |
 | **Vue Router** | 4.x | 路由管理 |
@@ -109,6 +111,10 @@
 │  ├─ ConversationTool (对话 + 意图分析)                 │
 │  ├─ RecommendationTool (LangGraph 推荐流)              │
 │  └─ ItineraryGenerationTool (LangGraph 行程流)         │
+│                                                         │
+│  安全层：AgentConfig + InputSanitizer      │
+│  ├─ 三层超时控制 (Agent/LLM/Tool)                     │
+│  └─ 五层安全防护 (验证/检测/净化/转义/脱敏)            │
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────┴────────────────────────────────┐
@@ -133,33 +139,58 @@
 backend/    # Spring Boot 服务 + LangGraph Agent 核心
 ├── src/main/java/com/travel/agent/
 │   ├── ai/              # Agent、工具、状态机节点
+│   │   ├── agent/       # ReAct Agent 实现
+│   │   ├── graph/       # LangGraph 工作流定义
+│   │   ├── nodes/       # 工作流节点实现
+│   │   ├── state/       # 状态对象
+│   │   ├── tools/       # Agent 工具
+│   │   ├── embedding/   # 向量嵌入
+│   │   ├── memory/      # 记忆管理
+│   │   ├── reflection/  # 反思循环
+│   │   └── vectorstore/ # 向量数据库集成
+│   ├── config/          # 配置类（AgentConfig 等）
+│   ├── security/        # 安全工具（InputSanitizer 等）
 │   ├── service/         # 业务服务层
 │   ├── controller/      # REST API 控制器
 │   ├── entity/          # 数据库实体
-│   ├── monitoring/      # 监控指标服务
-│   └── evaluation/      # 推荐评估服务
+│   ├── dto/             # 数据传输对象
+│   ├── exception/       # 异常处理
+│   ├── mapper/          # MyBatis Mapper 接口
+│   ├── generator/       # 代码生成工具
+│   └── monitoring/      # 监控指标服务
 └── src/main/resources/
     ├── application.yml  # 应用配置（需自行创建）
     └── mapper/          # MyBatis XML 映射
 
 frontend/   # Vue 3 客户端
 ├── src/
-│   ├── components/      # Vue 组件
-│   ├── api/            # API 调用封装
-│   └── assets/         # 静态资源
-└── .env                # 前端配置（需自行创建）
+│   ├── views/           # 页面组件
+│   ├── components/      # 可复用组件
+│   ├── api/             # API 调用封装
+│   ├── stores/          # Pinia 状态管理
+│   ├── router/          # Vue Router 路由配置
+│   ├── composables/     # 组合式函数
+│   ├── layouts/         # 布局组件
+│   ├── utils/           # 工具函数
+│   └── assets/          # 静态资源
+└── .env                 # 前端配置（需自行创建）
 
 data/       # RAG 知识库（旅游指南 Markdown）
 ├── knowledge/
 │   ├── paris_guide.md
 │   ├── tokyo_guide.md
+│   ├── beijing_guide.md
+│   ├── shanghai_guide.md
+│   ├── kyoto_guide.md
 │   └── ...
 
 infra/      # Docker Compose + 数据库初始化脚本
 ├── docker/
 │   ├── docker-compose.yml              # 基础设施
 │   ├── docker-compose-monitoring.yml   # 监控服务
-│   └── prometheus/                     # Prometheus 配置
+│   ├── prometheus/                     # Prometheus 配置
+│   ├── grafana/                        # Grafana 配置
+│   └── alertmanager/                   # Alertmanager 配置
 └── setup_postgres.sql                  # 数据库初始化脚本
 ```
 
