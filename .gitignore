@@ -30,3 +30,18 @@ application-dev.yml
 
 # 测试报告（不上传）
 **/test-reports/
+
+# 项目文档（根目录，不上传）
+/CLAUDE.md
+/Agent*.md
+/评审报告.md
+/README验证报告.md
+/.claude/
+/.claudeignore
+/docs/
+/产品prd/
+/技术面试/
+/项目架构与业务流程说明文档/
+
+# 临时备份目录
+backend/temp/
