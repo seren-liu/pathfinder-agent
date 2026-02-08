@@ -26,27 +26,27 @@ public class ActivityPlan {
     private String notes;
     
     /**
-     * 从 Map 转换
+     * 从 Map 转换（使用 Builder 模式）
      */
     public static ActivityPlan fromMap(Map<String, Object> map) {
         if (map == null) return null;
-        
-        ActivityPlan activity = new ActivityPlan();
-        activity.setName((String) map.get("name"));
-        activity.setType((String) map.get("type"));
-        activity.setLocation((String) map.get("location"));
-        activity.setStartTime((String) map.get("startTime"));
-        activity.setDurationMinutes((Integer) map.get("durationMinutes"));
-        activity.setDescription((String) map.get("description"));
-        activity.setNotes((String) map.get("notes"));
-        
+
+        ActivityPlanBuilder builder = ActivityPlan.builder()
+                .name((String) map.get("name"))
+                .type((String) map.get("type"))
+                .location((String) map.get("location"))
+                .startTime((String) map.get("startTime"))
+                .durationMinutes((Integer) map.get("durationMinutes"))
+                .description((String) map.get("description"))
+                .notes((String) map.get("notes"));
+
         Object cost = map.get("estimatedCost");
         if (cost instanceof BigDecimal) {
-            activity.setEstimatedCost((BigDecimal) cost);
+            builder.estimatedCost((BigDecimal) cost);
         } else if (cost instanceof Number) {
-            activity.setEstimatedCost(new BigDecimal(cost.toString()));
+            builder.estimatedCost(new BigDecimal(cost.toString()));
         }
-        
-        return activity;
+
+        return builder.build();
     }
 }

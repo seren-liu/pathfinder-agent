@@ -22,26 +22,26 @@ public class DayPlan {
     private List<ActivityPlan> activities;
     
     /**
-     * 从 Map 转换
+     * 从 Map 转换（使用 Builder 模式）
      */
     @SuppressWarnings("unchecked")
     public static DayPlan fromMap(Map<String, Object> map) {
         if (map == null) return null;
-        
-        DayPlan dayPlan = new DayPlan();
-        dayPlan.setDayNumber((Integer) map.get("dayNumber"));
-        dayPlan.setTheme((String) map.get("theme"));
-        dayPlan.setDate((String) map.get("date"));
-        
+
+        DayPlanBuilder builder = DayPlan.builder()
+                .dayNumber((Integer) map.get("dayNumber"))
+                .theme((String) map.get("theme"))
+                .date((String) map.get("date"));
+
         Object activitiesObj = map.get("activities");
         if (activitiesObj instanceof List) {
             List<Map<String, Object>> activityMaps = (List<Map<String, Object>>) activitiesObj;
             List<ActivityPlan> activities = activityMaps.stream()
                 .map(ActivityPlan::fromMap)
                 .toList();
-            dayPlan.setActivities(activities);
+            builder.activities(activities);
         }
-        
-        return dayPlan;
+
+        return builder.build();
     }
 }

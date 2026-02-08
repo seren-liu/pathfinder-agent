@@ -23,30 +23,30 @@ public class Coordinates {
     private String errorMessage;
     
     /**
-     * 从 Map 转换
+     * 从 Map 转换（使用 Builder 模式）
      */
     public static Coordinates fromMap(Map<String, Object> map) {
         if (map == null) return null;
-        
-        Coordinates coord = new Coordinates();
-        coord.setLocation((String) map.get("location"));
-        coord.setSuccess((Boolean) map.get("success"));
-        coord.setErrorMessage((String) map.get("errorMessage"));
-        
+
+        CoordinatesBuilder builder = Coordinates.builder()
+                .location((String) map.get("location"))
+                .success((Boolean) map.get("success"))
+                .errorMessage((String) map.get("errorMessage"));
+
         Object lat = map.get("latitude");
         if (lat instanceof BigDecimal) {
-            coord.setLatitude((BigDecimal) lat);
+            builder.latitude((BigDecimal) lat);
         } else if (lat instanceof Number) {
-            coord.setLatitude(new BigDecimal(lat.toString()));
+            builder.latitude(new BigDecimal(lat.toString()));
         }
-        
+
         Object lon = map.get("longitude");
         if (lon instanceof BigDecimal) {
-            coord.setLongitude((BigDecimal) lon);
+            builder.longitude((BigDecimal) lon);
         } else if (lon instanceof Number) {
-            coord.setLongitude(new BigDecimal(lon.toString()));
+            builder.longitude(new BigDecimal(lon.toString()));
         }
-        
-        return coord;
+
+        return builder.build();
     }
 }

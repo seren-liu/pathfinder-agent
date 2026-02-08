@@ -24,37 +24,37 @@ public class BudgetCheck {
     private List<String> recommendations;
     
     /**
-     * 从 Map 转换
+     * 从 Map 转换（使用 Builder 模式）
      */
     @SuppressWarnings("unchecked")
     public static BudgetCheck fromMap(Map<String, Object> map) {
         if (map == null) return null;
-        
-        BudgetCheck check = new BudgetCheck();
-        check.setWithinBudget((Boolean) map.get("withinBudget"));
-        check.setRecommendations((List<String>) map.get("recommendations"));
-        
+
+        BudgetCheckBuilder builder = BudgetCheck.builder()
+                .withinBudget((Boolean) map.get("withinBudget"))
+                .recommendations((List<String>) map.get("recommendations"));
+
         Object totalCost = map.get("totalCost");
         if (totalCost instanceof BigDecimal) {
-            check.setTotalCost((BigDecimal) totalCost);
+            builder.totalCost((BigDecimal) totalCost);
         } else if (totalCost instanceof Number) {
-            check.setTotalCost(new BigDecimal(totalCost.toString()));
+            builder.totalCost(new BigDecimal(totalCost.toString()));
         }
-        
+
         Object budget = map.get("budget");
         if (budget instanceof BigDecimal) {
-            check.setBudget((BigDecimal) budget);
+            builder.budget((BigDecimal) budget);
         } else if (budget instanceof Number) {
-            check.setBudget(new BigDecimal(budget.toString()));
+            builder.budget(new BigDecimal(budget.toString()));
         }
-        
+
         Object remaining = map.get("remaining");
         if (remaining instanceof BigDecimal) {
-            check.setRemaining((BigDecimal) remaining);
+            builder.remaining((BigDecimal) remaining);
         } else if (remaining instanceof Number) {
-            check.setRemaining(new BigDecimal(remaining.toString()));
+            builder.remaining(new BigDecimal(remaining.toString()));
         }
-        
-        return check;
+
+        return builder.build();
     }
 }
