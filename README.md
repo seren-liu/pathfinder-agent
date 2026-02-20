@@ -41,9 +41,9 @@
 
 ### LangGraph 状态机工作流
 - **推荐流程**：5 节点状态机（意图分析 → RAG 检索 → 区域过滤 → AI 排序选择 → 生成推荐理由）
-- **行程流程**：6 节点状态机（任务规划 → RAG 检索 → 预算验证 → 行程生成 → 质量反思 → 保存）
-  - 反思循环：质量不达标时可循环回行程生成节点（最多3次迭代）
-- **状态追踪**：所有状态可追踪、可恢复、可回溯，支持断点续传
+- **行程流程**：6 节点主链路（任务规划 → RAG 检索 → 预算验证 → 行程生成 → 质量反思 → 保存）
+- **异步后处理**：保存后后台执行地理编码等非阻塞任务，不影响主链路完成返回
+- **状态追踪**：状态可追踪、可回溯，便于排障与观测
 
 ### RAG 增强检索
 - **向量检索**：Chroma 存储真实景点数据，语义搜索相关信息
@@ -90,7 +90,7 @@
 | **Element Plus** | Latest | UI 组件库 |
 | **Pinia** | Latest | 状态管理 |
 | **Vue Router** | 4.x | 路由管理 |
-| **Leaflet/Mapbox** | Latest | 地图展示 |
+| **MapLibre/Mapbox/Leaflet** | Latest | 地图展示（MapLibre 主用，Leaflet 兼容） |
 
 ### AI 模型
 | 模型 | 用途 | 特点 |
@@ -120,7 +120,7 @@
 ┌────────────────────────┴────────────────────────────────┐
 │  编排层：LangGraph4j 状态机工作流                      │
 │  ├─ RecommendationGraph (5 节点)                       │
-│  └─ TravelPlanningGraph (6 节点 + 反思循环)            │
+│  └─ TravelPlanningGraph (默认 6 节点主链路)            │
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────┴────────────────────────────────┐
@@ -146,7 +146,7 @@ backend/    # Spring Boot 服务 + LangGraph Agent 核心
 │   │   ├── tools/       # Agent 工具
 │   │   ├── embedding/   # 向量嵌入
 │   │   ├── memory/      # 记忆管理
-│   │   ├── reflection/  # 反思循环
+│   │   ├── reflection/  # 质量反思与校验
 │   │   └── vectorstore/ # 向量数据库集成
 │   ├── config/          # 配置类（AgentConfig 等）
 │   ├── security/        # 安全工具（InputSanitizer 等）
@@ -159,8 +159,9 @@ backend/    # Spring Boot 服务 + LangGraph Agent 核心
 │   ├── generator/       # 代码生成工具
 │   └── monitoring/      # 监控指标服务
 └── src/main/resources/
-    ├── application.yml  # 应用配置（需自行创建）
-    └── mapper/          # MyBatis XML 映射
+    ├── application.yml.example  # 配置模板
+    ├── application.yml          # 应用配置（需自行创建）
+    └── mapper/                  # MyBatis XML 映射
 
 frontend/   # Vue 3 客户端
 ├── src/
@@ -192,6 +193,7 @@ infra/      # Docker Compose + 数据库初始化脚本
 │   ├── grafana/                        # Grafana 配置
 │   └── alertmanager/                   # Alertmanager 配置
 └── setup_postgres.sql                  # 数据库初始化脚本
+
 ```
 
 ## 环境要求
@@ -324,7 +326,7 @@ Alertmanager (通知)
 
 ```promql
 # 缓存命中率
-sum(rate(cache_hit[5m])) / (sum(rate(cache_hit[5m])) + sum(rate(cache_miss[5m])))
+sum(rate(cache_hit_total[5m])) / (sum(rate(cache_hit_total[5m])) + sum(rate(cache_miss_total[5m])))
 
 # Agent 执行成功率
 sum(rate(agent_execution_success[5m])) / sum(rate(agent_execution_total[5m]))
@@ -353,17 +355,12 @@ rate(llm_call_duration_seconds_sum[5m]) / rate(llm_call_duration_seconds_count[5
    mapbox.access-token: YOUR_MAPBOX_TOKEN   # 从 https://account.mapbox.com/ 获取
    geoapify.api-key: YOUR_GEOAPIFY_KEY      # 从 https://www.geoapify.com/ 获取
    
-   # AWS S3（可选，用于照片存储）
-   s3.access-key-id: YOUR_AWS_ACCESS_KEY_ID
-   s3.secret-access-key: YOUR_AWS_SECRET_KEY
-   s3.bucket: your-s3-bucket-name
-   
    # 数据库与缓存（使用默认值即可）
    spring.datasource.url: jdbc:postgresql://localhost:5432/travel_agent
    spring.datasource.username: postgres
    spring.datasource.password: postgres
    spring.data.redis.host: localhost
-   
+
    # 向量数据库
    langchain4j.chroma.base-url: http://localhost:8000
    ```

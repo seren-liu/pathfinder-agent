@@ -1,7 +1,46 @@
 <template>
   <AppLayout>
     <section class="intent-page">
-      <el-card class="intent-card" shadow="never">
+      <div class="intent-workspace">
+        <aside :class="['session-sidebar', { 'is-collapsed': isSidebarCollapsed }]">
+          <div class="sidebar-header">
+            <p v-if="!isSidebarCollapsed" class="sidebar-title">Conversations</p>
+            <el-button
+              class="collapse-btn"
+              text
+              circle
+              :icon="isSidebarCollapsed ? ArrowRightBold : ArrowLeftBold"
+              @click="isSidebarCollapsed = !isSidebarCollapsed"
+            />
+          </div>
+
+          <div v-if="!isSidebarCollapsed" class="sidebar-actions">
+            <el-button type="primary" plain size="small" @click="handleNewConversation">
+              New
+            </el-button>
+          </div>
+
+          <el-scrollbar v-if="!isSidebarCollapsed" class="session-list">
+            <button
+              v-for="session in conversationSessions"
+              :key="session.id"
+              type="button"
+              :class="['session-item', { 'is-active': session.id === activeSessionId }]"
+              @click="handleSelectConversation(session.id)"
+            >
+              <p class="session-item-title">{{ session.title }}</p>
+              <p class="session-item-preview">{{ session.lastMessage || "No messages yet" }}</p>
+              <p class="session-item-time">{{ formatSessionTime(session.updatedAt) }}</p>
+            </button>
+
+            <div v-if="conversationSessions.length === 0" class="session-empty">
+              No conversations yet
+            </div>
+          </el-scrollbar>
+        </aside>
+
+        <div class="chat-center">
+          <el-card class="intent-card" shadow="never">
         <div class="intent-toolbar">
           <div class="toolbar-left">
             <span class="status-dot" aria-hidden="true"></span>
@@ -64,7 +103,9 @@
             </div>
           </div>
         </el-scrollbar>
-      </el-card>
+          </el-card>
+        </div>
+      </div>
 
       <section class="page-composer" aria-label="Message composer">
         <div v-if="parsedIntent || nextAction" class="assistant-rail">
@@ -135,18 +176,29 @@
 </template>
 
 <script setup>
-import { ref, nextTick, computed } from "vue"
+import { ref, nextTick, computed, onMounted } from "vue"
 import { useRouter } from "vue-router"
 import { ElMessage, ElMessageBox } from "element-plus"
-import { Calendar, Search, ChatDotRound, User, Position, Delete } from "@element-plus/icons-vue"
+import {
+  Calendar,
+  Search,
+  ChatDotRound,
+  User,
+  Position,
+  Delete,
+  ArrowLeftBold,
+  ArrowRightBold
+} from "@element-plus/icons-vue"
 import { chatWithAgent } from "@/api/agent"
 import { clearChatHistory } from "@/api/chat"
 import { generateItinerary as generateItineraryApi } from "@/api/trips"
+import { useChatSessionsStore } from "@/stores/chatSessions"
 import { useUserStore } from "@/stores/user"
 import AppLayout from "@/layouts/AppLayout.vue"
 
 const router = useRouter()
 const userStore = useUserStore()
+const chatSessionsStore = useChatSessionsStore()
 
 const quickPrompts = [
   "I need a relaxing 5-day beach trip under $2000",
@@ -161,10 +213,73 @@ const showSlowWarning = ref(false)
 
 const chatMessages = ref([])
 const sessionId = ref(null)
+const activeSessionId = ref(null)
+const conversationSessions = ref([])
+const isSidebarCollapsed = ref(false)
 const chatLoading = ref(false)
 const currentIntent = ref(null)
 const currentPhase = ref("chat")
 const agentResponse = ref(null)
+
+const normalizeMessages = (messages) => {
+  return (messages || []).map((msg) => ({
+    role: msg.role,
+    content: msg.content,
+    timestamp: msg.timestamp || msg.createdAt || new Date().toISOString()
+  }))
+}
+
+const refreshConversationSessions = async () => {
+  if (!userStore.userId) {
+    conversationSessions.value = []
+    return
+  }
+  const sessions = await chatSessionsStore.fetchSessions(userStore.userId)
+  conversationSessions.value = (sessions || []).map((session) => ({
+    id: session.sessionId,
+    title: session.title || "New conversation",
+    lastMessage: session.lastMessage || "",
+    updatedAt: session.updatedAt
+  }))
+}
+
+const loadConversationById = async (id) => {
+  if (!id) return
+  const messages = await chatSessionsStore.fetchSessionMessages(userStore.userId, id)
+  sessionId.value = id
+  activeSessionId.value = id
+  chatMessages.value = normalizeMessages(messages)
+  parsedIntent.value = null
+  currentIntent.value = null
+  agentResponse.value = null
+  userInput.value = ""
+  await nextTick()
+  scrollToBottom()
+}
+
+const handleSelectConversation = async (id) => {
+  if (chatLoading.value || !id) return
+  await loadConversationById(id)
+}
+
+const createEmptyConversation = async () => {
+  if (!userStore.userId) return
+  const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  await chatSessionsStore.ensureSession(userStore.userId, newSessionId, "New conversation")
+  sessionId.value = newSessionId
+  activeSessionId.value = sessionId.value
+  chatMessages.value = []
+  parsedIntent.value = null
+  currentIntent.value = null
+  agentResponse.value = null
+  userInput.value = ""
+  await refreshConversationSessions()
+}
+
+const handleNewConversation = async () => {
+  if (chatLoading.value) return
+  await createEmptyConversation()
+}
 
 const inputPlaceholder = computed(() => {
   if (chatMessages.value.length > 0) {
@@ -239,6 +354,10 @@ const sendChatMessage = async () => {
   const userMessage = userInput.value.trim()
   let slowTimer = null
 
+  if (!sessionId.value) {
+    await createEmptyConversation()
+  }
+
   chatMessages.value.push({
     role: "user",
     content: userMessage,
@@ -256,10 +375,6 @@ const sendChatMessage = async () => {
   }, 7000)
 
   try {
-    if (!sessionId.value) {
-      sessionId.value = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    }
-
     const response = await chatWithAgent({
       userId: userStore.userId,
       sessionId: sessionId.value,
@@ -268,6 +383,7 @@ const sendChatMessage = async () => {
 
     agentResponse.value = response
     handleAgentResponse(response)
+    await refreshConversationSessions()
 
     await nextTick()
     scrollToBottom()
@@ -337,6 +453,7 @@ const handleAgentResponse = (response) => {
         timestamp: new Date()
       })
   }
+
 }
 
 const handleGetRecommendations = () => {
@@ -425,16 +542,20 @@ const handleClearChat = async () => {
     )
 
     if (sessionId.value) {
+      await chatSessionsStore.removeSession(userStore.userId, sessionId.value)
       await clearChatHistory(sessionId.value, userStore.userId)
     }
 
     chatMessages.value = []
     sessionId.value = null
+    activeSessionId.value = null
     userInput.value = ""
     parsedIntent.value = null
     currentIntent.value = null
     agentResponse.value = null
     showSlowWarning.value = false
+    await refreshConversationSessions()
+    await createEmptyConversation()
 
     ElMessage.success("Conversation cleared")
   } catch (error) {
@@ -462,15 +583,150 @@ const formatTime = (timestamp) => {
 const getBudgetLabel = (level) => {
   return { 1: "Budget ($)", 2: "Moderate ($$)", 3: "Luxury ($$$)" }[level] || "Unknown"
 }
+
+const formatSessionTime = (time) => {
+  if (!time) return ""
+  const date = new Date(time)
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+}
+
+onMounted(async () => {
+  if (!userStore.userId) {
+    return
+  }
+  await refreshConversationSessions()
+
+  if (conversationSessions.value.length > 0) {
+    await loadConversationById(conversationSessions.value[0].id)
+    return
+  }
+
+  await createEmptyConversation()
+})
 </script>
 
 <style scoped>
 .intent-page {
-  width: min(980px, 100%);
-  margin: 0 auto;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
   padding-bottom: 0;
   position: relative;
   font-family: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.intent-workspace {
+  position: relative;
+  width: 100%;
+}
+
+.session-sidebar {
+  position: fixed;
+  top: 140px;
+  left: max(16px, calc(50% - 760px));
+  width: 248px;
+  border: 1px solid #d6e4f2;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 14px;
+  padding: 10px;
+  height: clamp(360px, calc(100dvh - 320px), 680px);
+  z-index: 30;
+  transition: width 180ms ease;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.sidebar-actions {
+  margin-bottom: 8px;
+}
+
+.sidebar-title {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: #4c637d;
+  font-weight: 700;
+}
+
+.session-list {
+  height: calc(100% - 34px);
+}
+
+.collapse-btn {
+  color: #4e6882;
+}
+
+.session-sidebar.is-collapsed {
+  width: 56px;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.session-sidebar.is-collapsed .sidebar-header {
+  justify-content: center;
+}
+
+.session-item {
+  width: 100%;
+  border: 1px solid #d7e3f0;
+  background: #ffffff;
+  border-radius: 10px;
+  padding: 8px;
+  margin-bottom: 8px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.session-item:hover {
+  border-color: #99bbdf;
+}
+
+.session-item.is-active {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.14);
+}
+
+.session-item-title {
+  margin: 0;
+  font-size: 13px;
+  color: #1f405c;
+  font-weight: 700;
+}
+
+.session-item-preview {
+  margin: 4px 0 0;
+  color: #5d7690;
+  font-size: 12px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.session-item-time {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: #7c93a8;
+}
+
+.session-empty {
+  color: #6f8599;
+  font-size: 12px;
+  text-align: center;
+  padding: 20px 8px;
+}
+
+.chat-center {
+  width: min(900px, calc(100vw - 72px));
+  margin: 0 auto;
 }
 
 .intent-card {
@@ -663,7 +919,7 @@ const getBudgetLabel = (level) => {
   left: 50%;
   bottom: calc(52px + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
-  width: min(980px, calc(100vw - 52px));
+  width: min(900px, calc(100vw - 72px));
   z-index: 80;
   border-radius: 18px;
   border: 1px solid #cfdeee;
@@ -772,7 +1028,7 @@ const getBudgetLabel = (level) => {
   left: 50%;
   transform: translateX(-50%);
   bottom: calc(214px + env(safe-area-inset-bottom, 0px));
-  width: min(980px, calc(100vw - 52px));
+  width: min(900px, calc(100vw - 72px));
   z-index: 81;
   border-radius: 12px;
 }
@@ -813,9 +1069,27 @@ const getBudgetLabel = (level) => {
   min-width: 88px;
 }
 
+@media (max-width: 1200px) {
+  .session-sidebar {
+    position: static;
+    width: 100%;
+    height: auto;
+    max-height: 220px;
+    margin-bottom: 12px;
+  }
+
+  .session-sidebar.is-collapsed {
+    width: 100%;
+  }
+
+  .chat-center {
+    width: min(900px, calc(100vw - 40px));
+  }
+}
+
 @media (max-width: 768px) {
-  .intent-page {
-    padding-bottom: 0;
+  .session-sidebar {
+    max-height: 200px;
   }
 
   .chat-history {

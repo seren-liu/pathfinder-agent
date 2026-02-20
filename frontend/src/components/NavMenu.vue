@@ -30,6 +30,10 @@
         <el-icon><Suitcase /></el-icon>
         Current Trips
       </el-menu-item>
+      <el-menu-item @click="goToGeneratedItinerary">
+        <el-icon><Document /></el-icon>
+        Generated Itinerary
+      </el-menu-item>
       <el-menu-item index="/trips/history">
         <el-icon><Clock /></el-icon>
         Past Trips
@@ -222,6 +226,10 @@ const goToCurrentTrip = async () => {
     console.error('Failed to get latest trip:', error)
     ElMessage.error('Failed to load trips')
   }
+}
+
+const goToGeneratedItinerary = async () => {
+  await goToCurrentTrip()
 }
 
 const handleCommand = async (command) => {

@@ -3,6 +3,7 @@ package com.travel.agent.controller;
 import com.travel.agent.ai.agent.unified.AgentResponse;
 import com.travel.agent.ai.agent.unified.UnifiedReActAgent;
 import com.travel.agent.dto.response.CommonResponse;
+import com.travel.agent.service.ChatSessionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 public class AgentController {
     
     private final UnifiedReActAgent agent;
+    private final ChatSessionService chatSessionService;
     
     /**
      * 统一的 Agent 聊天接口
@@ -45,8 +47,21 @@ public class AgentController {
             if (sessionId == null || sessionId.isEmpty()) {
                 sessionId = java.util.UUID.randomUUID().toString();
             }
+
+            chatSessionService.ensureSession(userId, sessionId, null);
+            chatSessionService.appendMessage(userId, sessionId, "user", message, java.time.LocalDateTime.now());
             
             AgentResponse response = agent.execute(userId, sessionId, message);
+
+            if (response.getMessage() != null && !response.getMessage().isBlank()) {
+                chatSessionService.appendMessage(
+                        userId,
+                        sessionId,
+                        "assistant",
+                        response.getMessage(),
+                        java.time.LocalDateTime.now()
+                );
+            }
             
             log.info("✅ Agent response: actionType={}, tripId={}", 
                     response.getActionType(), response.getTripId());

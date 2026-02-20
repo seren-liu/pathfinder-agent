@@ -30,6 +30,11 @@ spring:
       - nearbyPlaces
       - placeImage
       - mapboxGeocode  # 新增：Mapbox 地理编码缓存
+  
+  # 缓存监控配置
+  cache-metrics:
+    enabled: true
+    reset-on-startup: false
 
 # MyBatis-Plus 配置
 mybatis-plus:
@@ -74,6 +79,7 @@ geoapify:
 mapbox:
   access-token: YOUR_MAPBOX_ACCESS_TOKEN  # 从 https://account.mapbox.com/ 获取
   geocoding-url: https://api.mapbox.com/geocoding/v5/mapbox.places
+  matrix-url: https://api.mapbox.com/directions-matrix/v1/mapbox/driving
   timeout: 15000  # 15秒超时
 
 # Google Gemini API 配置
