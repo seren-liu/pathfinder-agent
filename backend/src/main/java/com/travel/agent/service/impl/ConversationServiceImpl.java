@@ -71,12 +71,12 @@ public class ConversationServiceImpl implements ConversationService {
         // 8. 保存userId到数据库（通过ChatMemoryStore自动保存消息）
         saveConversationMetadata(userId, sessionId);
 
-        // 9. 多轮对话后重新分析意图（如果信息足够）
+        // 9. 多轮对话后重新分析意图（每轮都重新分析以获取最新信息）
         if (!isFirstMessage && intent == null) {
             String conversationSummary = buildConversationSummary(memory.messages());
-            if (intentAnalysisService.isFirstMessage(conversationSummary)) {
+            if (!conversationSummary.isEmpty()) {
                 intent = intentAnalysisService.analyzeIntent(conversationSummary);
-                log.info("🔄 Re-analyzed intent after conversation: type={}, destination={}", 
+                log.info("🔄 Re-analyzed intent after conversation: type={}, destination={}",
                         intent.getType(), intent.getDestination());
             }
         }

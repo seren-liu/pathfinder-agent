@@ -45,19 +45,19 @@ public class ItineraryGenerationNode implements AsyncNodeAction<TravelPlanningSt
                 
                 log.info("✅ Generated itinerary with {} days", itinerary.size());
                 
-                return Map.of(
-                    "itinerary", itinerary,
-                    "aiResponse", aiResponse,
-                    "currentStep", "Itinerary generation completed",
-                    "progress", 70,
-                    "progressMessage", String.format("Generated %d-day itinerary", itinerary.size())
-                );
+                Map<String, Object> result = new HashMap<>();
+                result.put("itinerary", itinerary);
+                result.put("aiResponse", aiResponse);
+                result.put("currentStep", "Itinerary generation completed");
+                result.put("progress", 65);
+                result.put("progressMessage", String.format("Generated %d-day itinerary", itinerary.size()));
+                return result;
                 
             } catch (Exception e) {
                 log.error("❌ Itinerary generation failed", e);
-                return Map.of(
-                    "errorMessage", "Itinerary generation failed: " + e.getMessage()
-                );
+                Map<String, Object> result = new HashMap<>();
+                result.put("errorMessage", "Itinerary generation failed: " + e.getMessage());
+                return result;
             }
         });
     }
@@ -68,8 +68,6 @@ public class ItineraryGenerationNode implements AsyncNodeAction<TravelPlanningSt
         prompt.append(String.format("""
             Generate a %d-day travel itinerary for %s, %s.
             Budget: $%s AUD, Party size: %d
-            
-            === REAL ATTRACTIONS FROM KNOWLEDGE BASE ===
             """,
             state.getDurationDays(),
             state.getDestination(),
@@ -78,8 +76,10 @@ public class ItineraryGenerationNode implements AsyncNodeAction<TravelPlanningSt
             state.getPartySize()
         ));
         
-        // 添加景点信息
-        if (state.getAttractions() != null && !state.getAttractions().isEmpty()) {
+        // 添加景点信息（如果有）
+        boolean hasAttractions = state.getAttractions() != null && !state.getAttractions().isEmpty();
+        if (hasAttractions) {
+            prompt.append("\n=== REAL ATTRACTIONS FROM KNOWLEDGE BASE ===\n");
             for (Map<String, Object> attr : state.getAttractions()) {
                 prompt.append(String.format("- %s (%s): %s\n",
                     attr.get("name"), attr.get("category"), attr.get("price")));
@@ -101,14 +101,19 @@ public class ItineraryGenerationNode implements AsyncNodeAction<TravelPlanningSt
             ));
         }
         
+        prompt.append("\n=== REQUIREMENTS ===\n");
+        if (hasAttractions) {
+            prompt.append("1. Prioritize using the attractions listed above (they are real and verified)\n");
+            prompt.append("2. You may add other popular attractions if needed\n");
+        } else {
+            prompt.append("1. Generate a realistic itinerary with popular attractions in " + state.getDestination() + "\n");
+            prompt.append("2. Include well-known landmarks, museums, restaurants, and activities\n");
+        }
         prompt.append("""
-            
-            === REQUIREMENTS ===
-            1. Use ONLY the attractions listed above (they are real and verified)
-            2. Ensure the itinerary fits within the budget
-            3. Each day should have 3-4 activities
-            4. Include specific times and durations
-            5. Return ONLY valid JSON (no markdown, no extra text)
+            3. Ensure the itinerary fits within the budget
+            4. Each day should have 3-4 activities
+            5. Include specific times and durations
+            6. Return ONLY valid JSON (no markdown, no extra text)
             
             JSON Format:
             {

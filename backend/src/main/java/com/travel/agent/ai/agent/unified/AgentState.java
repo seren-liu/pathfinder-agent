@@ -3,8 +3,10 @@ package com.travel.agent.ai.agent.unified;
 import com.travel.agent.dto.AIDestinationRecommendation;
 import com.travel.agent.dto.TravelIntent;
 import com.travel.agent.dto.response.ParseIntentResponse;
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -16,6 +18,8 @@ import java.util.Map;
  */
 @Data
 @Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class AgentState {
     private Long userId;
     private String sessionId;

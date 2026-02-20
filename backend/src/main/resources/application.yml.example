@@ -243,6 +243,10 @@ info:
 
 # ==================== Agent 配置 ====================
 agent:
+  # ========== 路线优化配置 ==========
+  route-optimization:
+    enabled: false                  # 是否启用路线优化（Demo建议关闭以提升速度）
+  
   react:
     # ========== 执行控制 ==========
     max-iterations: 15              # Agent 最大迭代次数

@@ -5,7 +5,6 @@ import com.travel.agent.ai.agent.unified.tools.ConversationTool;
 import com.travel.agent.ai.agent.unified.tools.ItineraryGenerationTool;
 import com.travel.agent.ai.agent.unified.tools.RecommendationTool;
 import com.travel.agent.config.AgentConfig;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -21,7 +20,6 @@ import java.util.concurrent.*;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class ToolRegistry {
 
     private final ConversationTool conversationTool;

@@ -2,6 +2,7 @@ package com.travel.agent.service.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.travel.agent.ai.state.TravelPlanningState;
 import com.travel.agent.dto.request.GenerateItineraryRequest;
 import com.travel.agent.entity.*;
 import com.travel.agent.exception.BusinessException;
@@ -36,6 +37,7 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
     private final DestinationsService destinationsService;
     private final GeoapifyService geoapifyService;  // 保留用于附近地点搜索
     private final MapboxGeocodingService mapboxGeocodingService;  // 新增：Mapbox 地理编码
+    private final RouteOptimizationService routeOptimizationService;  // 新增：路线优化服务
     private final RedisTemplate<String, Object> redisTemplate;
     private final ObjectMapper objectMapper;
     private final StateMachineItineraryService stateMachineService;  // 新增：状态机服务
@@ -74,30 +76,51 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
             log.info("Destination: {} ({}), Lat: {}, Lon: {}", 
                 destinationName, destinationCountry, latitude, longitude);
             
-            // 2. 调用 OpenAI 生成行程框架
-            updateProgress(tripId, 30, "AI is planning your itinerary...");
-            String aiPrompt = buildOptimizedPrompt(destinationName, destinationCountry, request);
-            String aiResponse = aiService.chat(aiPrompt);
+            // 🚀 使用 StateMachineItineraryService（快速生成基本行程）
+            log.info("🔄 Using TravelPlanningGraph for fast itinerary generation");
             
-            // 3. 解析 AI 响应
-            updateProgress(tripId, 50, "Parsing itinerary data...");
-            List<DayPlan> dayPlans = parseAIResponse(aiResponse, request);
-            
-            // 4. 快速保存到数据库（不地理编码）
-            updateProgress(tripId, 70, "Saving itinerary...");
-            saveItineraryToDatabase(tripId, request, dayPlans, destinationName, latitude, longitude);
-            
-            // 5. 更新 Trip 状态为 completed（让用户可以立即查看）
-            Trips trip = tripsService.getById(tripId);
-            trip.setStatus("completed");
-            tripsService.updateById(trip);
-            
-            // 清除缓存
-            evictTripCache(tripId);
-            
-            // ✅ 行程生成完成
-            updateProgress(tripId, 100, "Itinerary ready!");
-            log.info("✅ Itinerary saved successfully: tripId={}", tripId);
+            // ⚡ 等待基本行程保存完成
+            stateMachineService.generateItinerary(tripId, request)
+                .thenAccept(finalState -> {
+                    log.info("✅ Basic itinerary saved, finalState progress: {}", finalState.getProgress());
+                    
+                    // 更新 Trip 状态为 completed
+                    Trips trip = tripsService.getById(tripId);
+                    trip.setStatus("completed");
+                    tripsService.updateById(trip);
+                    
+                    // 清除缓存
+                    evictTripCache(tripId);
+                    
+                    // ✅ 基本行程生成完成
+                    updateProgress(tripId, 70, "Basic itinerary ready!");
+                    log.info("✅ Basic itinerary saved: tripId={}", tripId);
+                    
+                    // 🔄 异步执行地理编码和路线优化（串行执行，确保优化时有坐标）
+                    CompletableFuture.runAsync(() -> {
+                        try {
+                            // 1. 先完成地理编码
+                            log.info("🗺️ Starting background geocoding for trip: {}", tripId);
+                            geocodeActivitiesSync(tripId);
+                            log.info("✅ Geocoding completed for trip: {}", tripId);
+                            
+                            // 2. 再执行路线优化（此时数据库已有坐标）
+                            log.info("🚀 Starting background route optimization for trip: {}", tripId);
+                            optimizeRoutesInBackground(tripId, finalState);
+                            
+                            updateProgress(tripId, 100, "Route optimization completed!");
+                            log.info("✅ Route optimization completed: tripId={}", tripId);
+                        } catch (Exception e) {
+                            log.error("❌ Background processing failed for trip: {}", tripId, e);
+                        }
+                    });
+                })
+                .exceptionally(ex -> {
+                    log.error("❌ State machine execution failed for trip: {}", tripId, ex);
+                    updateProgress(tripId, 0, "Generation failed: " + ex.getMessage());
+                    return null;
+                })
+                .join(); // 等待基本保存完成
             
         } catch (Exception e) {
             log.error("Itinerary generation failed: tripId={}, error={}", tripId, e.getMessage(), e);
@@ -121,19 +144,6 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
             
             return CompletableFuture.completedFuture(null);
         }
-        
-        // ✅ 事务已提交，status='completed' 立即可见，用户可以跳转
-        // 6. 异步地理编码（后台执行，不阻塞用户）
-        CompletableFuture.runAsync(() -> {
-            try {
-                log.info("🗺️ Starting background geocoding for trip: {}", tripId);
-                geocodeActivitiesSync(tripId);
-                evictTripCache(tripId);
-                log.info("✅ Background geocoding completed for trip: {}", tripId);
-            } catch (Exception e) {
-                log.error("⚠️ Background geocoding failed for trip: {}", tripId, e);
-            }
-        });
         
         return CompletableFuture.completedFuture(null);
     }
@@ -330,20 +340,112 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
     }
     
     /**
-     * 更新生成进度（存储到 Redis）
+     * 后台执行路线优化
+     */
+    private void optimizeRoutesInBackground(Long tripId, TravelPlanningState state) {
+        try {
+            // 获取已保存的行程
+            List<ItineraryDays> days = itineraryDaysService.list(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ItineraryDays>()
+                    .eq(ItineraryDays::getTripId, tripId)
+                    .orderByAsc(ItineraryDays::getDayNumber)
+            );
+            
+            if (days.isEmpty()) {
+                log.warn("No itinerary days found for trip: {}", tripId);
+                return;
+            }
+            
+            // 获取目的地上下文
+            String destinationContext = state.getDestination() + 
+                (state.getDestinationCountry() != null ? ", " + state.getDestinationCountry() : "");
+            
+            // 对每一天执行路线优化
+            for (ItineraryDays day : days) {
+                List<ItineraryItems> items = itineraryItemsService.list(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ItineraryItems>()
+                        .eq(ItineraryItems::getDayId, day.getId())
+                        .orderByAsc(ItineraryItems::getOrderIndex)
+                );
+                
+                if (items.size() >= 3) {
+                    log.info("🔄 Optimizing route for day {}: {} items", day.getDayNumber(), items.size());
+                    
+                    // 转换为 Map 格式供 RouteOptimizationService 使用
+                    List<Map<String, Object>> activities = new ArrayList<>();
+                    Map<String, Map<String, BigDecimal>> geoData = new HashMap<>();
+                    
+                    for (ItineraryItems item : items) {
+                        Map<String, Object> activity = new HashMap<>();
+                        activity.put("name", item.getActivityName());
+                        activity.put("type", item.getActivityType());
+                        activity.put("location", item.getLocation());
+                        activity.put("startTime", item.getStartTime() != null ? item.getStartTime().toString() : "09:00");
+                        activity.put("durationMinutes", item.getDurationMinutes() != null ? item.getDurationMinutes() : 60);
+                        activities.add(activity);
+                        
+                        // 如果有坐标，添加到 geoData
+                        if (item.getLatitude() != null && item.getLongitude() != null) {
+                            String fullLocation = item.getLocation() + ", " + destinationContext;
+                            Map<String, BigDecimal> coords = new HashMap<>();
+                            coords.put("latitude", item.getLatitude());
+                            coords.put("longitude", item.getLongitude());
+                            geoData.put(fullLocation, coords);
+                        }
+                    }
+                    
+                    // 调用路线优化服务
+                    List<Map<String, Object>> optimizedActivities = 
+                        routeOptimizationService.optimizeDayRoute(activities, geoData, destinationContext);
+                    
+                    // 更新数据库中的顺序和时间
+                    for (int i = 0; i < optimizedActivities.size(); i++) {
+                        Map<String, Object> optimized = optimizedActivities.get(i);
+                        ItineraryItems item = items.get(i);
+                        
+                        // 更新顺序
+                        item.setOrderIndex(i + 1);
+                        
+                        // 更新开始时间
+                        String startTimeStr = (String) optimized.get("startTime");
+                        if (startTimeStr != null) {
+                            try {
+                                item.setStartTime(LocalTime.parse(startTimeStr));
+                            } catch (Exception e) {
+                                log.warn("Failed to parse optimized start time: {}", startTimeStr);
+                            }
+                        }
+                        
+                        itineraryItemsService.updateById(item);
+                    }
+                    
+                    log.info("✅ Route optimized for day {}", day.getDayNumber());
+                }
+            }
+            
+            // 清除缓存
+            evictTripCache(tripId);
+            
+        } catch (Exception e) {
+            log.error("❌ Background route optimization failed", e);
+        }
+    }
+    
+    /**
+     * 更新进度到 Redis
      */
     @Override
-    public void updateProgress(Long tripId, Integer progress, String step) {
+    public void updateProgress(Long tripId, Integer progress, String message) {
         String key = "trip:generation:" + tripId;
         Map<String, Object> progressData = new HashMap<>();
         progressData.put("progress", progress);
-        progressData.put("step", step);
+        progressData.put("step", message);
         progressData.put("timestamp", System.currentTimeMillis());
         
         redisTemplate.opsForHash().putAll(key, progressData);
         redisTemplate.expire(key, 10, TimeUnit.MINUTES);
         
-        log.info("📊 Progress updated: tripId={}, progress={}%, step={}", tripId, progress, step);
+        log.info("📊 Progress updated: tripId={}, progress={}%, step={}", tripId, progress, message);
     }
     
     /**

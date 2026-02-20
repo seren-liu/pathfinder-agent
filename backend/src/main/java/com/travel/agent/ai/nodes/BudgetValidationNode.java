@@ -70,20 +70,19 @@ public class BudgetValidationNode implements AsyncNodeAction<TravelPlanningState
                 budgetCheckMap.put("remaining", validation.getRemaining());
                 budgetCheckMap.put("recommendations", validation.getRecommendations());
                 
-                return Map.of(
-                    "budgetCheck", budgetCheckMap,
-                    "currentStep", "Budget validation completed",
-                    "progress", 40,
-                    "progressMessage", validation.getWithinBudget() 
-                        ? "Budget validation passed" 
-                        : "Budget exceeded, will adjust"
-                );
+                Map<String, Object> result = new HashMap<>();
+                result.put("budgetCheck", budgetCheckMap);
+                result.put("currentStep", "Budget validation completed");
+                result.put("progress", 40);
+                result.put("progressMessage", String.format("Budget validated: $%.2f / $%.2f", 
+                    validation.getTotalCost(), validation.getBudget()));
+                return result;
                 
             } catch (Exception e) {
                 log.error("❌ Budget validation failed", e);
-                return Map.of(
-                    "errorMessage", "Budget validation failed: " + e.getMessage()
-                );
+                Map<String, Object> result = new HashMap<>();
+                result.put("errorMessage", "Budget validation failed: " + e.getMessage());
+                return result;
             }
         });
     }

@@ -67,7 +67,7 @@ public class ReflectionNode implements AsyncNodeAction<TravelPlanningState> {
             updates.put("currentStep", result.getApproved() 
                 ? "Enhanced validation passed" 
                 : "Issues found, needs revision");
-            updates.put("progress", 80);
+            updates.put("progress", 85);
             updates.put("progressMessage", result.getApproved() 
                 ? String.format("Itinerary validated successfully (%d checks passed)", 
                     result.getIssues().size() - result.getCriticalCount())

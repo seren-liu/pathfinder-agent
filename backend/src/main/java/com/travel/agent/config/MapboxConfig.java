@@ -23,6 +23,11 @@ public class MapboxConfig {
     private String geocodingUrl = "https://api.mapbox.com/geocoding/v5/mapbox.places";
     
     /**
+     * Matrix API 基础 URL
+     */
+    private String matrixUrl = "https://api.mapbox.com/directions-matrix/v1/mapbox/driving";
+
+    /**
      * 请求超时时间（毫秒）
      */
     private Integer timeout = 15000;

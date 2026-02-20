@@ -7,6 +7,7 @@ import org.bsc.langgraph4j.action.AsyncNodeAction;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -37,13 +38,13 @@ public class PlanningNode implements AsyncNodeAction<TravelPlanningState> {
             log.info("📋 Created {} planning steps", steps.size());
             
             // 更新状态
-            return Map.of(
-                "planSteps", steps,
-                "currentStep", "Planning completed",
-                "stepCount", 1,
-                "progress", 10,
-                "progressMessage", "Task planning completed"
-            );
+            Map<String, Object> result = new HashMap<>();
+            result.put("planSteps", steps);
+            result.put("currentStep", "Planning completed");
+            result.put("stepCount", 1);
+            result.put("progress", 10);
+            result.put("progressMessage", "Task planning completed");
+            return result;
         });
     }
 }

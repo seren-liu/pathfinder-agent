@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bsc.langgraph4j.CompiledGraph;
 import org.bsc.langgraph4j.StateGraph;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -23,10 +24,14 @@ import static org.bsc.langgraph4j.action.AsyncEdgeAction.edge_async;
 @RequiredArgsConstructor
 public class TravelPlanningGraph {
     
+    @Value("${agent.route-optimization.enabled:false}")
+    private boolean routeOptimizationEnabled;
+    
     private final PlanningNode planningNode;
     private final RAGRetrievalNode ragRetrievalNode;
     private final BudgetValidationNode budgetValidationNode;
     private final ItineraryGenerationNode itineraryGenerationNode;
+    private final RouteOptimizationNode routeOptimizationNode;
     private final ReflectionNode reflectionNode;
     private final SaveNode saveNode;
     
@@ -60,30 +65,19 @@ public class TravelPlanningGraph {
         // budget_validation -> itinerary_generation
         workflow.addEdge("budget_validation", "itinerary_generation");
         
-        // itinerary_generation -> reflection
-        workflow.addEdge("itinerary_generation", "reflection");
+        // 条件路由：根据配置决定是否启用路线优化
+        if (routeOptimizationEnabled) {
+            log.info("🗺️ Route optimization ENABLED");
+            workflow.addNode("route_optimization", routeOptimizationNode);
+            workflow.addEdge("itinerary_generation", "route_optimization");
+            workflow.addEdge("route_optimization", "reflection");
+        } else {
+            log.info("⚡ Route optimization DISABLED (fast mode)");
+            workflow.addEdge("itinerary_generation", "reflection");
+        }
         
-        // reflection -> save (if approved) or itinerary_generation (if needs revision)
-        workflow.addConditionalEdges(
-            "reflection",
-            edge_async(state -> {
-                Boolean approved = state.getApproved();
-                Integer reflectionCount = state.getReflectionCount();
-                
-                // 如果通过验证或已反思3次，进入保存
-                if (Boolean.TRUE.equals(approved) || reflectionCount >= 3) {
-                    log.info("✅ Reflection approved or max iterations reached, proceeding to save");
-                    return "save";
-                } else {
-                    log.info("🔄 Reflection found issues, regenerating itinerary");
-                    return "itinerary_generation";
-                }
-            }),
-            Map.of(
-                "save", "save",
-                "itinerary_generation", "itinerary_generation"
-            )
-        );
+        // reflection -> save
+        workflow.addEdge("reflection", "save");
         
         // save -> END
         workflow.addEdge("save", END);

@@ -57,20 +57,20 @@ public class RAGRetrievalNode implements AsyncNodeAction<TravelPlanningState> {
                 }
                 
                 // 更新状态
-                return Map.of(
-                    "attractions", attractionMaps,
-                    "currentStep", "RAG retrieval completed",
-                    "stepCount", state.getStepCount() != null ? state.getStepCount() + 1 : 2,
-                    "progress", 30,
-                    "progressMessage", String.format("Found %d real attractions", attractions.size())
-                );
+                Map<String, Object> result = new HashMap<>();
+                result.put("attractions", attractionMaps);
+                result.put("currentStep", "RAG retrieval completed");
+                result.put("stepCount", state.getStepCount() != null ? state.getStepCount() + 1 : 2);
+                result.put("progress", 25);
+                result.put("progressMessage", String.format("Retrieved %d attractions", attractionMaps.size()));
+                return result;
                 
             } catch (Exception e) {
                 log.error("❌ RAG retrieval failed", e);
-                return Map.of(
-                    "errorMessage", "RAG retrieval failed: " + e.getMessage(),
-                    "attractions", new ArrayList<>()  // 空列表，继续流程
-                );
+                Map<String, Object> result = new HashMap<>();
+                result.put("errorMessage", "RAG retrieval failed: " + e.getMessage());
+                result.put("attractions", new ArrayList<>());
+                return result;
             }
         });
     }

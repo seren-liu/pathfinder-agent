@@ -219,6 +219,15 @@
             <version>${langgraph4j.version}</version>
         </dependency>
 
+        <!-- ==================== 路线优化依赖 ==================== -->
+
+        <!-- Google OR-Tools for TSP/VRP route optimization -->
+        <dependency>
+            <groupId>com.google.ortools</groupId>
+            <artifactId>ortools-java</artifactId>
+            <version>9.12.4544</version>
+        </dependency>
+
         <!-- ==================== 辅助依赖 ==================== -->
 
         <!-- Apache Commons Text (用于文本处理) -->

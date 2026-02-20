@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -50,17 +51,17 @@ public class SaveNode implements AsyncNodeAction<TravelPlanningState> {
                 
                 log.info("✅ Itinerary saved successfully");
                 
-                return Map.of(
-                    "currentStep", "Completed",
-                    "progress", 100,
-                    "progressMessage", "Itinerary saved successfully!"
-                );
+                Map<String, Object> result = new HashMap<>();
+                result.put("currentStep", "Completed");
+                result.put("progress", 100);
+                result.put("progressMessage", "Itinerary saved successfully!");
+                return result;
                 
             } catch (Exception e) {
                 log.error("❌ Save failed", e);
-                return Map.of(
-                    "errorMessage", "Save failed: " + e.getMessage()
-                );
+                Map<String, Object> result = new HashMap<>();
+                result.put("errorMessage", "Save failed: " + e.getMessage());
+                return result;
             }
         });
     }
@@ -119,7 +120,34 @@ public class SaveNode implements AsyncNodeAction<TravelPlanningState> {
                     }
                     
                     item.setOrderIndex(orderIndex++);
-                    
+
+                    // 从 geoData 查找地理编码坐标并持久化
+                    Map<String, Map<String, Object>> geoData = state.getGeoData();
+                    String activityLocation = (String) activity.get("location");
+                    if (activityLocation != null && geoData != null && !geoData.isEmpty()) {
+                        String fullKey = activityLocation + ", " + state.getDestination()
+                                + (state.getDestinationCountry() != null
+                                    ? ", " + state.getDestinationCountry() : "");
+                        Map<String, Object> coords = geoData.get(fullKey);
+                        if (coords == null) {
+                            coords = geoData.get(activityLocation);
+                        }
+                        if (coords != null) {
+                            Object lat = coords.get("latitude");
+                            Object lon = coords.get("longitude");
+                            if (lat instanceof BigDecimal) {
+                                item.setLatitude((BigDecimal) lat);
+                            } else if (lat instanceof Number) {
+                                item.setLatitude(new BigDecimal(lat.toString()));
+                            }
+                            if (lon instanceof BigDecimal) {
+                                item.setLongitude((BigDecimal) lon);
+                            } else if (lon instanceof Number) {
+                                item.setLongitude(new BigDecimal(lon.toString()));
+                            }
+                        }
+                    }
+
                     itineraryItemsService.save(item);
                 }
             }

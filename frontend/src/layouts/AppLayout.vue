@@ -15,8 +15,9 @@ import NavMenu from '@/components/NavMenu.vue'
 <style scoped>
 .main-interface {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  min-height: 100vh;
+  min-height: 100dvh;
   padding: 20px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -24,6 +25,7 @@ import NavMenu from '@/components/NavMenu.vue'
 
 .content-area {
   flex: 1;
+  min-height: 0;
   margin-top: 20px;
   padding: 50px 70px;
   background-color: white;
