@@ -71,15 +71,7 @@ public class ConversationServiceImpl implements ConversationService {
         // 8. 保存userId到数据库（通过ChatMemoryStore自动保存消息）
         saveConversationMetadata(userId, sessionId);
 
-        // 9. 多轮对话后重新分析意图（每轮都重新分析以获取最新信息）
-        if (!isFirstMessage && intent == null) {
-            String conversationSummary = buildConversationSummary(memory.messages());
-            if (!conversationSummary.isEmpty()) {
-                intent = intentAnalysisService.analyzeIntent(conversationSummary);
-                log.info("🔄 Re-analyzed intent after conversation: type={}, destination={}",
-                        intent.getType(), intent.getDestination());
-            }
-        }
+        // 9. 不再基于文本摘要重复推断意图，结构化意图由 Agent 的 session state 持久化维护
 
         log.info("✅ Chat response generated for session: {}", sessionId);
 
@@ -99,9 +91,16 @@ public class ConversationServiceImpl implements ConversationService {
         StringBuilder prompt = new StringBuilder();
         
         // 系统提示词
-        prompt.append("You are a helpful travel planning assistant. ");
-        prompt.append("Your goal is to understand the user's travel preferences through conversation. ");
-        prompt.append("Be friendly, ask clarifying questions, and guide the conversation naturally.\n\n");
+        prompt.append("You are an experienced travel consultant. ");
+        prompt.append("Reply in the same language as the user (default Simplified Chinese). ");
+        prompt.append("Sound natural, warm, and proactive.\n");
+        prompt.append("Conversation style rules:\n");
+        prompt.append("1) Start with a short acknowledgement of what user just said.\n");
+        prompt.append("2) Avoid form-like or robotic wording.\n");
+        prompt.append("3) Ask at most ONE most important follow-up question per turn.\n");
+        prompt.append("4) If destination + days + budget are already clear, offer to start itinerary directly and give one optional refinement.\n");
+        prompt.append("5) Keep responses concise (2-4 short sentences).\n");
+        prompt.append("6) Never ask user to repeat information already provided in history.\n\n");
         
         // 意图信息（首次对话）
         if (intent != null) {
@@ -165,21 +164,5 @@ public class ConversationServiceImpl implements ConversationService {
         // ChatMemoryStore会自动保存消息
         // 这里可以添加额外的元数据保存逻辑
         log.debug("Conversation metadata saved for user: {}, session: {}", userId, sessionId);
-    }
-    
-    /**
-     * 构建对话摘要（用于重新分析意图）
-     */
-    private String buildConversationSummary(List<ChatMessage> messages) {
-        StringBuilder summary = new StringBuilder();
-        
-        for (ChatMessage message : messages) {
-            if (message instanceof dev.langchain4j.data.message.UserMessage) {
-                summary.append(((dev.langchain4j.data.message.UserMessage) message).singleText())
-                       .append(" ");
-            }
-        }
-        
-        return summary.toString().trim();
     }
 }

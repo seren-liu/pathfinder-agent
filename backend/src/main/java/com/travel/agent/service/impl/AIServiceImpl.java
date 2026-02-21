@@ -1,7 +1,10 @@
 package com.travel.agent.service.impl;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.travel.agent.config.OpenAIConfig;
 import com.travel.agent.dto.AIDestinationRecommendation;
 import com.travel.agent.dto.AIRecommendationResponse;
@@ -474,6 +477,129 @@ public class AIServiceImpl implements AIService {
                 // 不启用降级，直接抛出异常
                 throw primaryError;
             }
+        }
+    }
+
+    @Override
+    public String chatWithFunctionCall(
+            String prompt,
+            String functionName,
+            String functionDescription,
+            String parametersJsonSchema
+    ) {
+        if (prompt == null || prompt.isBlank()) {
+            throw new BusinessException("Prompt cannot be empty.");
+        }
+        if (functionName == null || functionName.isBlank()) {
+            throw new BusinessException("Function name is required.");
+        }
+        if (parametersJsonSchema == null || parametersJsonSchema.isBlank()) {
+            throw new BusinessException("Function parameters schema is required.");
+        }
+
+        try {
+            return callOpenAIWithFunctionCall(
+                    prompt,
+                    functionName,
+                    functionDescription == null ? "" : functionDescription,
+                    parametersJsonSchema
+            );
+        } catch (Exception e) {
+            log.error("❌ OpenAI function call failed: function={}", functionName, e);
+            throw new BusinessException("Failed to execute structured AI extraction. Please try again.");
+        }
+    }
+
+    private String callOpenAIWithFunctionCall(
+            String prompt,
+            String functionName,
+            String functionDescription,
+            String parametersJsonSchema
+    ) {
+        try {
+            JsonObject requestBody = new JsonObject();
+            requestBody.addProperty("model", openAIConfig.getModel());
+            requestBody.addProperty("max_tokens", openAIConfig.getMaxTokens());
+            requestBody.addProperty("temperature", 0.0);
+            requestBody.addProperty("parallel_tool_calls", false);
+
+            JsonObject message = new JsonObject();
+            message.addProperty("role", "user");
+            message.addProperty("content", prompt);
+            requestBody.add("messages", gson.toJsonTree(List.of(message)));
+
+            JsonObject function = new JsonObject();
+            function.addProperty("name", functionName);
+            function.addProperty("description", functionDescription);
+            function.add("parameters", JsonParser.parseString(parametersJsonSchema));
+
+            JsonObject tool = new JsonObject();
+            tool.addProperty("type", "function");
+            tool.add("function", function);
+            requestBody.add("tools", gson.toJsonTree(List.of(tool)));
+
+            JsonObject functionChoice = new JsonObject();
+            functionChoice.addProperty("name", functionName);
+            JsonObject toolChoice = new JsonObject();
+            toolChoice.addProperty("type", "function");
+            toolChoice.add("function", functionChoice);
+            requestBody.add("tool_choice", toolChoice);
+
+            Request request = new Request.Builder()
+                    .url(openAIConfig.getBaseUrl() + "/chat/completions")
+                    .header("Authorization", "Bearer " + openAIConfig.getApiKey())
+                    .header("Content-Type", "application/json")
+                    .post(RequestBody.create(
+                            requestBody.toString(),
+                            MediaType.parse("application/json")
+                    ))
+                    .build();
+
+            try (Response response = getClient().newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    String errorBody = response.body() != null ? response.body().string() : "unknown";
+                    log.error("OpenAI function call API error: status={}, body={}", response.code(), errorBody);
+                    throw new BusinessException("Structured AI service unavailable.");
+                }
+
+                if (response.body() == null) {
+                    throw new BusinessException("Structured AI returned empty response.");
+                }
+
+                String responseBody = response.body().string();
+                JsonObject jsonResponse = gson.fromJson(responseBody, JsonObject.class);
+                JsonObject messageObj = jsonResponse
+                        .getAsJsonArray("choices")
+                        .get(0)
+                        .getAsJsonObject()
+                        .getAsJsonObject("message");
+
+                JsonArray toolCalls = messageObj.getAsJsonArray("tool_calls");
+                if (toolCalls == null || toolCalls.isEmpty()) {
+                    throw new BusinessException("Structured AI did not return tool calls.");
+                }
+
+                JsonObject firstToolCall = toolCalls.get(0).getAsJsonObject();
+                JsonObject functionObj = firstToolCall.getAsJsonObject("function");
+                if (functionObj == null) {
+                    throw new BusinessException("Structured AI returned invalid tool call.");
+                }
+
+                JsonElement nameElement = functionObj.get("name");
+                if (nameElement == null || !functionName.equals(nameElement.getAsString())) {
+                    throw new BusinessException("Structured AI returned unexpected function.");
+                }
+
+                JsonElement argumentsElement = functionObj.get("arguments");
+                if (argumentsElement == null || argumentsElement.getAsString().isBlank()) {
+                    throw new BusinessException("Structured AI returned empty arguments.");
+                }
+
+                return cleanJsonResponse(argumentsElement.getAsString());
+            }
+        } catch (IOException e) {
+            log.error("Failed to call OpenAI function call API", e);
+            throw new BusinessException("Failed to process structured AI request.");
         }
     }
 }

@@ -49,7 +49,13 @@ public class ItineraryGenerationTool implements UnifiedAgentTool {
             return ActionResult.builder()
                 .toolName("generate_itinerary")
                 .success(true)
-                .observation("Itinerary generation started successfully, tripId: " + tripId)
+                .observation(String.format(
+                        "已开始为你生成行程：%s，%d天，预算%s（行程ID：%d）。我会先给出基础版，再在后台继续优化路线。",
+                        request.getDestinationName(),
+                        request.getDurationDays(),
+                        request.getTotalBudget(),
+                        tripId
+                ))
                 .result(tripId)
                 .build();
                 

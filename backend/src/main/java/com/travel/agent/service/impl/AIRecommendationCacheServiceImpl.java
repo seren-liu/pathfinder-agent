@@ -125,14 +125,14 @@ public class AIRecommendationCacheServiceImpl implements AIRecommendationCacheSe
                     .mood(intent.getMood())
                     .keywords(JSON.toJSONString(intent.getKeywords()))
                     .preferredFeatures(JSON.toJSONString(intent.getPreferredFeatures()))
-                    .budgetLevel(intent.getBudgetLevel().byteValue())
+                    .budgetLevel((byte) (intent.getBudgetLevel() != null ? intent.getBudgetLevel() : 2))
                     .estimatedDuration(intent.getEstimatedDuration())
                     .recommendations(recommendations)
                     .createdAt(LocalDateTime.now())
                     .expiresAt(LocalDateTime.now().plus(CACHE_EXPIRATION))
                     .build();
 
-            cacheMapper.insert(cache);
+            cacheMapper.insertJsonb(cache);
             log.info("💾 Saved to Database: userId={}, sessionId={}, id={}", userId, sessionId, cache.getId());
         } catch (Exception e) {
             log.error("Failed to save to Database: {}", e.getMessage(), e);

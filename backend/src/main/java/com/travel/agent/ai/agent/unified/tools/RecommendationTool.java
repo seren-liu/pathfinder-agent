@@ -3,6 +3,7 @@ package com.travel.agent.ai.agent.unified.tools;
 import com.travel.agent.ai.agent.ActionResult;
 import com.travel.agent.ai.agent.unified.AgentState;
 import com.travel.agent.ai.agent.unified.UnifiedAgentTool;
+import com.travel.agent.dto.AIDestinationRecommendation;
 import com.travel.agent.dto.TravelIntent;
 import com.travel.agent.dto.response.DestinationResponse;
 import com.travel.agent.dto.response.ParseIntentResponse;
@@ -40,12 +41,16 @@ public class RecommendationTool implements UnifiedAgentTool {
                 null,  // excludeNames
                 false  // forceRefresh
             );
+
+            List<AIDestinationRecommendation> aiRecommendations = recommendations.stream()
+                    .map(this::toAIDestinationRecommendation)
+                    .toList();
             
             return ActionResult.builder()
                 .toolName("recommend_destinations")
                 .success(true)
-                .observation(String.format("Found %d destination recommendations", recommendations.size()))
-                .result(recommendations)
+                .observation(String.format("Found %d destination recommendations", aiRecommendations.size()))
+                .result(aiRecommendations)
                 .build();
                 
         } catch (Exception e) {
@@ -71,6 +76,7 @@ public class RecommendationTool implements UnifiedAgentTool {
         
         ParseIntentResponse parsedIntent = new ParseIntentResponse();
         parsedIntent.setSessionId(state.getSessionId());
+        parsedIntent.setDestination(intent.getDestination());
         
         // 从 TravelIntent 提取信息
         if (intent.getMood() != null) {
@@ -118,5 +124,24 @@ public class RecommendationTool implements UnifiedAgentTool {
     @Override
     public String getDescription() {
         return "Recommend destinations based on user preferences";
+    }
+
+    private AIDestinationRecommendation toAIDestinationRecommendation(DestinationResponse destination) {
+        return AIDestinationRecommendation.builder()
+                .destinationId(destination.getDestinationId())
+                .destinationName(destination.getName())
+                .country(destination.getCountry())
+                .state(destination.getState())
+                .description(destination.getDescription())
+                .features(destination.getFeatures())
+                .bestSeason(destination.getBestSeason())
+                .budgetLevel(destination.getBudgetLevel())
+                .recommendedDays(destination.getRecommendedDays())
+                .estimatedCost(destination.getEstimatedCost())
+                .matchScore(destination.getMatchScore())
+                .recommendReason(destination.getRecommendReason())
+                .latitude(destination.getLatitude() != null ? destination.getLatitude().doubleValue() : null)
+                .longitude(destination.getLongitude() != null ? destination.getLongitude().doubleValue() : null)
+                .build();
     }
 }

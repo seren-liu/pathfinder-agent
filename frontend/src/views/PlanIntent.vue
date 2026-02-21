@@ -595,12 +595,6 @@ onMounted(async () => {
     return
   }
   await refreshConversationSessions()
-
-  if (conversationSessions.value.length > 0) {
-    await loadConversationById(conversationSessions.value[0].id)
-    return
-  }
-
   await createEmptyConversation()
 })
 </script>

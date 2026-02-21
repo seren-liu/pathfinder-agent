@@ -13,4 +13,8 @@ import org.apache.ibatis.annotations.Mapper;
 @Mapper
 public interface AIRecommendationCacheMapper extends BaseMapper<AIRecommendationCache> {
 
+    /**
+     * PostgreSQL jsonb insert（避免将 JSON 参数按 varchar 写入 jsonb 列）
+     */
+    int insertJsonb(AIRecommendationCache cache);
 }

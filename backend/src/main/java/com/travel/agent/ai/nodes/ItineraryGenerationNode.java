@@ -142,15 +142,7 @@ public class ItineraryGenerationNode implements AsyncNodeAction<TravelPlanningSt
     }
     
     private List<Map<String, Object>> parseItinerary(String aiResponse) throws Exception {
-        // 清理 markdown
-        String cleaned = aiResponse.trim()
-            .replaceAll("^```json\\s*", "")
-            .replaceAll("^```\\s*", "")
-            .replaceAll("```$", "")
-            .trim();
-        
-        // 解析 JSON
-        JsonNode root = objectMapper.readTree(cleaned);
+        JsonNode root = parseJsonLenient(aiResponse);
         JsonNode daysNode = root.get("days");
         
         if (daysNode == null || !daysNode.isArray()) {
@@ -165,5 +157,96 @@ public class ItineraryGenerationNode implements AsyncNodeAction<TravelPlanningSt
         }
         
         return itinerary;
+    }
+
+    /**
+     * 容错解析：
+     * 1) 直接 JSON
+     * 2) Markdown code fence 内 JSON
+     * 3) 文本中首个平衡的大括号 JSON
+     */
+    private JsonNode parseJsonLenient(String aiResponse) throws Exception {
+        if (aiResponse == null || aiResponse.isBlank()) {
+            throw new IllegalArgumentException("AI response is empty");
+        }
+
+        String raw = aiResponse.trim();
+
+        try {
+            return objectMapper.readTree(raw);
+        } catch (Exception ignored) {
+        }
+
+        String fenced = extractFromCodeFence(raw);
+        if (fenced != null) {
+            try {
+                return objectMapper.readTree(fenced);
+            } catch (Exception ignored) {
+            }
+        }
+
+        String jsonObject = extractFirstJsonObject(raw);
+        if (jsonObject != null) {
+            return objectMapper.readTree(jsonObject);
+        }
+
+        throw new IllegalArgumentException("Unable to parse itinerary JSON from AI response");
+    }
+
+    private String extractFromCodeFence(String raw) {
+        int fenceStart = raw.indexOf("```");
+        if (fenceStart < 0) {
+            return null;
+        }
+        int contentStart = raw.indexOf('\n', fenceStart);
+        if (contentStart < 0) {
+            return null;
+        }
+        int fenceEnd = raw.indexOf("```", contentStart + 1);
+        if (fenceEnd < 0) {
+            return null;
+        }
+        return raw.substring(contentStart + 1, fenceEnd).trim();
+    }
+
+    private String extractFirstJsonObject(String text) {
+        int start = text.indexOf('{');
+        if (start < 0) {
+            return null;
+        }
+
+        boolean inString = false;
+        boolean escaped = false;
+        int depth = 0;
+
+        for (int i = start; i < text.length(); i++) {
+            char ch = text.charAt(i);
+
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (ch == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (ch == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+
+            if (ch == '{') {
+                depth++;
+            } else if (ch == '}') {
+                depth--;
+                if (depth == 0) {
+                    return text.substring(start, i + 1).trim();
+                }
+            }
+        }
+        return null;
     }
 }

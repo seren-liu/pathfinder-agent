@@ -46,4 +46,20 @@ public interface AIService {
      * @return AI 响应内容
      */
     String chat(String prompt);
+
+    /**
+     * 调用函数调用接口并返回函数参数 JSON
+     *
+     * @param prompt 用户提示词
+     * @param functionName 函数名
+     * @param functionDescription 函数描述
+     * @param parametersJsonSchema 函数参数 JSON Schema
+     * @return 函数调用返回的 arguments JSON
+     */
+    String chatWithFunctionCall(
+            String prompt,
+            String functionName,
+            String functionDescription,
+            String parametersJsonSchema
+    );
 }
