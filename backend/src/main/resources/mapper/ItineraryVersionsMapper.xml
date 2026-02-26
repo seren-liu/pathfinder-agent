@@ -2,6 +2,30 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.travel.agent.mapper.ItineraryVersionsMapper">
 
+    <insert id="insertJsonb"
+            parameterType="com.travel.agent.entity.ItineraryVersions"
+            useGeneratedKeys="true"
+            keyProperty="id">
+        INSERT INTO itinerary_versions
+        (
+            trip_id,
+            version_number,
+            snapshot,
+            change_description,
+            total_cost,
+            created_at
+        )
+        VALUES
+        (
+            #{tripId},
+            #{versionNumber},
+            CAST(#{snapshot} AS jsonb),
+            #{changeDescription},
+            #{totalCost},
+            #{createdAt}
+        )
+    </insert>
+
     <!-- 通用查询映射结果 -->
     <resultMap id="BaseResultMap" type="com.travel.agent.entity.ItineraryVersions">
         <id column="id" property="id" />

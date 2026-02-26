@@ -1,4 +1,4 @@
-import request from '@/utils/request'
+import request from './request'
 
 /**
  * 发送聊天消息

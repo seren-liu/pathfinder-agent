@@ -15,10 +15,10 @@ import org.springframework.cache.annotation.Caching;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -47,10 +47,12 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
      */
     @Override
     @Async("taskExecutor")
-    @Transactional(rollbackFor = Exception.class)
     public CompletableFuture<Void> generateItineraryAsync(Long tripId, GenerateItineraryRequest request) {
         try {
             log.info("🚀 Starting itinerary generation: tripId={}", tripId);
+
+            markTripStatus(tripId, "generating");
+            updateProgressWithStatus(tripId, 5, "Generation started...", "generating", null);
             
             // ✅ 方案 B: 使用请求中的目的地信息，不依赖 destinationId
             updateProgress(tripId, 10, "Preparing destination information...");
@@ -85,15 +87,13 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
                     log.info("✅ Basic itinerary saved, finalState progress: {}", finalState.getProgress());
                     
                     // 更新 Trip 状态为 completed
-                    Trips trip = tripsService.getById(tripId);
-                    trip.setStatus("completed");
-                    tripsService.updateById(trip);
+                    markTripStatus(tripId, "completed");
                     
                     // 清除缓存
                     evictTripCache(tripId);
                     
                     // ✅ 基本行程生成完成
-                    updateProgress(tripId, 70, "Basic itinerary ready!");
+                    updateProgressWithStatus(tripId, 70, "Basic itinerary ready!", "completed", null);
                     log.info("✅ Basic itinerary saved: tripId={}", tripId);
                     
                     // 🔄 异步执行地理编码和路线优化（串行执行，确保优化时有坐标）
@@ -116,32 +116,17 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
                     });
                 })
                 .exceptionally(ex -> {
-                    log.error("❌ State machine execution failed for trip: {}", tripId, ex);
-                    updateProgress(tripId, 0, "Generation failed: " + ex.getMessage());
+                    String errorMessage = resolveExceptionMessage(ex);
+                    log.error("❌ State machine execution failed for trip: {}, error={}", tripId, errorMessage, ex);
+                    markGenerationFailed(tripId, errorMessage);
                     return null;
                 })
                 .join(); // 等待基本保存完成
             
         } catch (Exception e) {
-            log.error("Itinerary generation failed: tripId={}, error={}", tripId, e.getMessage(), e);
-            
-            String errorMessage = e.getMessage();
-            if (errorMessage == null || errorMessage.isEmpty()) {
-                errorMessage = "Unknown error occurred";
-            }
-            updateProgress(tripId, 0, "Generation failed: " + errorMessage);
-            
-            // 更新 Trip 状态为 planning（失败后回到规划状态）
-            try {
-                Trips trip = tripsService.getById(tripId);
-                if (trip != null) {
-                    trip.setStatus("planning");  // 使用数据库中已存在的状态
-                    tripsService.updateById(trip);
-                }
-            } catch (Exception ex) {
-                log.error("Failed to update trip status", ex);
-            }
-            
+            String errorMessage = resolveExceptionMessage(e);
+            log.error("Itinerary generation failed: tripId={}, error={}", tripId, errorMessage, e);
+            markGenerationFailed(tripId, errorMessage);
             return CompletableFuture.completedFuture(null);
         }
         
@@ -436,13 +421,26 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
      */
     @Override
     public void updateProgress(Long tripId, Integer progress, String message) {
-        String key = "trip:generation:" + tripId;
+        updateProgressWithStatus(tripId, progress, message, null, null);
+    }
+
+    private void updateProgressWithStatus(Long tripId, Integer progress, String message, String status, String errorMessage) {
+        String key = getProgressKey(tripId);
         Map<String, Object> progressData = new HashMap<>();
         progressData.put("progress", progress);
         progressData.put("step", message);
         progressData.put("timestamp", System.currentTimeMillis());
+        if (status != null) {
+            progressData.put("status", status);
+        }
+        if (errorMessage != null && !errorMessage.isBlank()) {
+            progressData.put("errorMessage", errorMessage);
+        }
         
         redisTemplate.opsForHash().putAll(key, progressData);
+        if (errorMessage == null || errorMessage.isBlank()) {
+            redisTemplate.opsForHash().delete(key, "errorMessage");
+        }
         redisTemplate.expire(key, 10, TimeUnit.MINUTES);
         
         log.info("📊 Progress updated: tripId={}, progress={}%, step={}", tripId, progress, message);
@@ -453,7 +451,7 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
      */
     @Override
     public Integer getGenerationProgress(Long tripId) {
-        String key = "trip:generation:" + tripId;
+        String key = getProgressKey(tripId);
         Object progress = redisTemplate.opsForHash().get(key, "progress");
         return progress != null ? Integer.parseInt(progress.toString()) : 0;
     }
@@ -463,9 +461,61 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
      */
     @Override
     public String getCurrentStep(Long tripId) {
-        String key = "trip:generation:" + tripId;
+        String key = getProgressKey(tripId);
         Object step = redisTemplate.opsForHash().get(key, "step");
         return step != null ? step.toString() : "Initializing...";
+    }
+
+    @Override
+    public String getGenerationStatus(Long tripId) {
+        String key = getProgressKey(tripId);
+        Object status = redisTemplate.opsForHash().get(key, "status");
+        return status != null ? status.toString() : null;
+    }
+
+    @Override
+    public String getGenerationErrorMessage(Long tripId) {
+        String key = getProgressKey(tripId);
+        Object error = redisTemplate.opsForHash().get(key, "errorMessage");
+        return error != null ? error.toString() : null;
+    }
+
+    private String getProgressKey(Long tripId) {
+        return "trip:generation:" + tripId;
+    }
+
+    private void markTripStatus(Long tripId, String status) {
+        try {
+            Trips trip = tripsService.getById(tripId);
+            if (trip == null) {
+                log.warn("Cannot update trip status because trip not found: tripId={}", tripId);
+                return;
+            }
+            trip.setStatus(status);
+            trip.setUpdatedAt(LocalDateTime.now());
+            tripsService.updateById(trip);
+        } catch (Exception e) {
+            log.error("Failed to update trip status: tripId={}, status={}", tripId, status, e);
+        }
+    }
+
+    private void markGenerationFailed(Long tripId, String errorMessage) {
+        String safeMessage = (errorMessage == null || errorMessage.isBlank()) ? "Unknown error occurred" : errorMessage;
+        markTripStatus(tripId, "failed");
+        updateProgressWithStatus(tripId, 0, "Generation failed: " + safeMessage, "failed", safeMessage);
+        evictTripCache(tripId);
+    }
+
+    private String resolveExceptionMessage(Throwable throwable) {
+        Throwable cursor = throwable;
+        while (cursor.getCause() != null && cursor.getCause() != cursor) {
+            cursor = cursor.getCause();
+        }
+        String message = cursor.getMessage();
+        if (message == null || message.isBlank()) {
+            message = throwable != null && throwable.getMessage() != null ? throwable.getMessage() : "Unknown error occurred";
+        }
+        return message;
     }
     
     /**

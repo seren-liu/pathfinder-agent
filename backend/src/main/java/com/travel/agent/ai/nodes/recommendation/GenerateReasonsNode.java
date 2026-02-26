@@ -1,5 +1,7 @@
 package com.travel.agent.ai.nodes.recommendation;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.travel.agent.ai.state.RecommendationState;
 import com.travel.agent.service.AIService;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +26,7 @@ import java.util.concurrent.CompletableFuture;
 public class GenerateReasonsNode implements AsyncNodeAction<RecommendationState> {
     
     private final AIService aiService;
+    private final ObjectMapper objectMapper;
     
     @Override
     public CompletableFuture<Map<String, Object>> apply(RecommendationState state) {
@@ -47,22 +50,27 @@ public class GenerateReasonsNode implements AsyncNodeAction<RecommendationState>
                     return updates;
                 }
                 
-                // 为每个推荐生成理由
+                // 统一拷贝，避免修改原状态数据
                 List<Map<String, Object>> enriched = new ArrayList<>();
-                for (Map<String, Object> rec : recommendations) {
+                List<Integer> missingReasonIndices = new ArrayList<>();
+                for (int i = 0; i < recommendations.size(); i++) {
+                    Map<String, Object> rec = recommendations.get(i);
                     Map<String, Object> enrichedRec = new HashMap<>(rec);
-                    
-                    // 如果已有推荐理由，跳过
-                    if (rec.containsKey("recommendReason") && rec.get("recommendReason") != null) {
-                        enriched.add(enrichedRec);
-                        continue;
+                    Object reason = enrichedRec.get("recommendReason");
+                    if (reason == null || reason.toString().isBlank()) {
+                        missingReasonIndices.add(i);
                     }
-                    
-                    // 生成推荐理由
-                    String reason = generateReason(state, rec);
-                    enrichedRec.put("recommendReason", reason);
-                    
                     enriched.add(enrichedRec);
+                }
+
+                // 批量一次性生成理由（Top3 一次调用）
+                if (!missingReasonIndices.isEmpty()) {
+                    Map<Integer, String> reasonByIndex = generateReasonsBatch(state, enriched, missingReasonIndices);
+                    for (Integer index : missingReasonIndices) {
+                        Map<String, Object> rec = enriched.get(index);
+                        String reason = reasonByIndex.getOrDefault(index + 1, buildFallbackReason(rec));
+                        rec.put("recommendReason", reason);
+                    }
                 }
                 
                 updates.put("recommendations", enriched);
@@ -83,55 +91,117 @@ public class GenerateReasonsNode implements AsyncNodeAction<RecommendationState>
         });
     }
     
-    /**
-     * 生成推荐理由
-     */
-    private String generateReason(RecommendationState state, Map<String, Object> destination) {
+    private Map<Integer, String> generateReasonsBatch(
+            RecommendationState state,
+            List<Map<String, Object>> recommendations,
+            List<Integer> targetIndices
+    ) {
         try {
-            String prompt = buildReasonPrompt(state, destination);
-            String reason = aiService.chat(prompt);
-            return reason.trim();
+            String prompt = buildBatchReasonPrompt(state, recommendations, targetIndices);
+            String response = aiService.chat(prompt);
+            return parseReasonMap(response);
         } catch (Exception e) {
-            log.error("Failed to generate reason for {}", destination.get("name"), e);
-            return String.format("%s is a great destination that matches your preferences.", 
-                destination.get("name"));
+            log.error("Failed to generate recommendation reasons in batch", e);
+            return Collections.emptyMap();
         }
     }
-    
-    /**
-     * 构建推荐理由 Prompt
-     */
-    private String buildReasonPrompt(RecommendationState state, Map<String, Object> destination) {
-        return String.format("""
-            Generate a personalized recommendation reason (2-3 sentences) for this destination.
-            
-            Destination: %s, %s
-            Description: %s
-            Features: %s
-            
-            User Preferences:
-            - Destination Preference: %s
-            - Interests: %s
-            - Mood: %s
-            - Budget Level: %d
-            - Duration: %d days
-            
-            The reason should:
-            1. Explain why this destination matches the user's destination preference (if any)
-            2. Highlight features that align with user interests
-            3. Be engaging and persuasive
-            
-            Return ONLY the recommendation reason text, no prefix or explanation.
-            """,
-            destination.get("name"),
-            destination.get("country"),
-            destination.get("description"),
-            destination.get("features"),
-            state.getDestinationPreference(),
-            String.join(", ", state.getInterests()),
-            state.getMood(),
-            state.getBudgetLevel(),
-            state.getDays()
+
+    private String buildBatchReasonPrompt(
+            RecommendationState state,
+            List<Map<String, Object>> recommendations,
+            List<Integer> targetIndices
+    ) {
+        StringBuilder destinations = new StringBuilder();
+        for (Integer index : targetIndices) {
+            Map<String, Object> destination = recommendations.get(index);
+            destinations.append(String.format(
+                    Locale.ROOT,
+                    "- index: %d, name: %s, country: %s, description: %s, features: %s%n",
+                    index + 1,
+                    String.valueOf(destination.get("name")),
+                    String.valueOf(destination.get("country")),
+                    String.valueOf(destination.get("description")),
+                    String.valueOf(destination.get("features"))
+            ));
+        }
+
+        return String.format(
+                Locale.ROOT,
+                """
+                Generate personalized recommendation reasons for the following travel destinations.
+                Return JSON only.
+
+                User Preferences:
+                - Destination Preference: %s
+                - Interests: %s
+                - Mood: %s
+                - Budget Level: %d
+                - Duration: %d days
+
+                Destinations:
+                %s
+
+                Output JSON format:
+                [
+                  {"index": 1, "reason": "2-3 sentence recommendation reason"},
+                  {"index": 2, "reason": "2-3 sentence recommendation reason"}
+                ]
+                """,
+                state.getDestinationPreference(),
+                String.join(", ", state.getInterests()),
+                state.getMood(),
+                state.getBudgetLevel(),
+                state.getDays(),
+                destinations.toString()
+        );
+    }
+
+    private Map<Integer, String> parseReasonMap(String rawResponse) {
+        if (rawResponse == null || rawResponse.isBlank()) {
+            return Collections.emptyMap();
+        }
+
+        try {
+            String cleaned = extractJsonBlock(rawResponse);
+            JsonNode root = objectMapper.readTree(cleaned);
+            JsonNode entries = root.isArray() ? root : root.get("reasons");
+            if (entries == null || !entries.isArray()) {
+                return Collections.emptyMap();
+            }
+
+            Map<Integer, String> reasonByIndex = new HashMap<>();
+            for (JsonNode item : entries) {
+                JsonNode idxNode = item.get("index");
+                JsonNode reasonNode = item.get("reason");
+                if (idxNode == null || reasonNode == null) {
+                    continue;
+                }
+                int index = idxNode.asInt();
+                String reason = reasonNode.asText("").trim();
+                if (index > 0 && !reason.isEmpty()) {
+                    reasonByIndex.put(index, reason);
+                }
+            }
+            return reasonByIndex;
+        } catch (Exception e) {
+            log.warn("Failed to parse batch recommendation reasons: {}", e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
+
+    private String extractJsonBlock(String response) {
+        String cleaned = response.trim();
+        if (cleaned.startsWith("```")) {
+            cleaned = cleaned.replaceFirst("^```(?:json)?", "").replaceFirst("```$", "").trim();
+        }
+        return cleaned;
+    }
+
+    private String buildFallbackReason(Map<String, Object> destination) {
+        return String.format(
+                Locale.ROOT,
+                "%s is a strong match for your interests and travel style.",
+                String.valueOf(destination.get("name"))
         );
     }
 }

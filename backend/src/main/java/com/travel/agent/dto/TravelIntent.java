@@ -45,6 +45,11 @@ public class TravelIntent {
      * 心情/旅行风格
      */
     private String mood;
+
+    /**
+     * 同行人类型
+     */
+    private CompanionType companionType;
     
     /**
      * 置信度 (0-1)
@@ -84,5 +89,15 @@ public class TravelIntent {
          * 继续对话（多轮对话中的后续消息）
          */
         CONTINUE_CONVERSATION
+    }
+
+    /**
+     * 同行人类型
+     */
+    public enum CompanionType {
+        SOLO,
+        COUPLE,
+        FAMILY,
+        FRIENDS
     }
 }

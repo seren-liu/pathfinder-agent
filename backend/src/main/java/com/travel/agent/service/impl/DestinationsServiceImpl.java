@@ -1,6 +1,7 @@
 package com.travel.agent.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.travel.agent.dto.AIDestinationRecommendation;
 import com.travel.agent.dto.response.DestinationResponse;
 import com.travel.agent.dto.response.ParseIntentResponse;
 import com.travel.agent.entity.Destinations;
@@ -17,6 +18,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.stream.Collectors;
 
 /**
  * <p>
@@ -38,6 +44,7 @@ public class DestinationsServiceImpl extends ServiceImpl<DestinationsMapper, Des
     private final com.travel.agent.service.RecommendationService recommendationService;
     private final AIRecommendationCacheService cacheService;
     private final GeoapifyService geoapifyService;
+    private final ConcurrentMap<String, CompletableFuture<List<AIDestinationRecommendation>>> inFlightRecommendationRequests = new ConcurrentHashMap<>();
 
     @Override
     public List<DestinationResponse> recommendDestinations(
@@ -55,7 +62,7 @@ public class DestinationsServiceImpl extends ServiceImpl<DestinationsMapper, Des
             throw new RuntimeException("User preferences not found");
         }
 
-        List<com.travel.agent.dto.AIDestinationRecommendation> aiRecommendations = null;
+        List<AIDestinationRecommendation> aiRecommendations = null;
 
         // 2. 如果不是强制刷新，尝试从缓存获取推荐
         if (forceRefresh == null || !forceRefresh) {
@@ -73,14 +80,29 @@ public class DestinationsServiceImpl extends ServiceImpl<DestinationsMapper, Des
             log.info("🤖 Generating new recommendations with LangGraph");
             
             // 使用前端传递的 excludeNames
-            List<String> excludeNamesList = excludeNames != null ? excludeNames : new java.util.ArrayList<>();
-            
-            // 使用 LangGraph 推荐系统
-            aiRecommendations = recommendationService.generateRecommendations(
-                parsedIntent, 
-                userId,
-                excludeNamesList
-            );
+            List<String> excludeNamesList = excludeNames == null
+                    ? new ArrayList<>()
+                    : excludeNames.stream()
+                    .filter(Objects::nonNull)
+                    .map(String::trim)
+                    .filter(name -> !name.isEmpty())
+                    .distinct()
+                    .collect(Collectors.toCollection(ArrayList::new));
+
+            // 使用 single-flight 防止同一意图被重复并发计算
+            if (Boolean.TRUE.equals(forceRefresh)) {
+                aiRecommendations = recommendationService.generateRecommendations(
+                        parsedIntent,
+                        userId,
+                        excludeNamesList
+                );
+            } else {
+                aiRecommendations = generateRecommendationsWithSingleFlight(
+                        userId,
+                        parsedIntent,
+                        excludeNamesList
+                );
+            }
             
             // 保存到缓存
             cacheService.cacheRecommendations(
@@ -113,7 +135,7 @@ public class DestinationsServiceImpl extends ServiceImpl<DestinationsMapper, Des
         List<DestinationResponse> responses = new ArrayList<>();
         
         for (int i = 0; i < aiRecommendations.size(); i++) {
-            com.travel.agent.dto.AIDestinationRecommendation aiRec = aiRecommendations.get(i);
+            AIDestinationRecommendation aiRec = aiRecommendations.get(i);
             String photoUrl = photoFutures.get(i).join();
             
             log.info("🔍 Mapping destination: {}, recommendedDays: {}", 
@@ -143,6 +165,36 @@ public class DestinationsServiceImpl extends ServiceImpl<DestinationsMapper, Des
 
         log.info("Returning {} destinations", responses.size());
         return responses;
+    }
+
+    private List<AIDestinationRecommendation> generateRecommendationsWithSingleFlight(
+            Long userId,
+            ParseIntentResponse parsedIntent,
+            List<String> excludeNames
+    ) {
+        String key = buildSingleFlightKey(userId, parsedIntent, excludeNames);
+        CompletableFuture<List<AIDestinationRecommendation>> future = inFlightRecommendationRequests.computeIfAbsent(
+                key,
+                ignored -> CompletableFuture
+                        .supplyAsync(() -> recommendationService.generateRecommendations(parsedIntent, userId, excludeNames))
+                        .whenComplete((result, throwable) -> inFlightRecommendationRequests.remove(key))
+        );
+
+        try {
+            List<AIDestinationRecommendation> recommendations = future.join();
+            return recommendations != null ? recommendations : new ArrayList<>();
+        } catch (CompletionException e) {
+            throw new RuntimeException("Failed to generate recommendations", e.getCause() != null ? e.getCause() : e);
+        }
+    }
+
+    private String buildSingleFlightKey(Long userId, ParseIntentResponse parsedIntent, List<String> excludeNames) {
+        String sessionId = parsedIntent != null && parsedIntent.getSessionId() != null ? parsedIntent.getSessionId() : "default";
+        String intentHash = cacheService.generateIntentHash(parsedIntent);
+        String excludePart = excludeNames == null || excludeNames.isEmpty()
+                ? ""
+                : excludeNames.stream().sorted().collect(Collectors.joining(","));
+        return String.format("%d:%s:%s:%s", userId, sessionId, intentHash, excludePart);
     }
 
     @Override

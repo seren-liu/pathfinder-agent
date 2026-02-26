@@ -124,6 +124,10 @@ public class ConversationTool implements UnifiedAgentTool {
                             buildMissingFieldsMessage(state, new LinkedHashSet<>(missing), recommendationMode)
                     );
                 }
+
+                if (intent.getType() == TravelIntent.IntentType.DESTINATION_CLEAR) {
+                    return toChatResponse(state, buildItineraryConfirmationMessage(state));
+                }
             }
         }
 
@@ -178,6 +182,9 @@ public class ConversationTool implements UnifiedAgentTool {
             if (isNotBlank(intent.getBudget())) {
                 known.add("预算：" + intent.getBudget());
             }
+            if (intent.getCompanionType() != null) {
+                known.add("同行人：" + formatCompanionType(intent.getCompanionType()));
+            }
             if (!known.isEmpty()) {
                 message.append("我这边已记录：").append(String.join("，", known)).append("。");
             }
@@ -186,7 +193,9 @@ public class ConversationTool implements UnifiedAgentTool {
         message.append(recommendationMode
                 ? "一句话补充就行，我拿到后马上给你出建议。"
                 : "补齐后我就可以直接开始生成行程。");
-        message.append("如果方便，也可以顺带说下同行人（独自/情侣/家庭）。");
+        if (intent == null || intent.getCompanionType() == null) {
+            message.append("如果方便，也可以顺带说下同行人（独自/情侣/家庭）。");
+        }
         return message.toString();
     }
 
@@ -216,6 +225,9 @@ public class ConversationTool implements UnifiedAgentTool {
             if (isNotBlank(interests)) {
                 message.append("，偏好").append(interests);
             }
+        }
+        if (intent != null && intent.getCompanionType() != null) {
+            message.append("，同行人").append(formatCompanionType(intent.getCompanionType()));
         }
 
         message.append("。如果你愿意，我现在就可以直接生成一版行程。");
@@ -253,6 +265,9 @@ public class ConversationTool implements UnifiedAgentTool {
         if (hasPreferenceSignal(lower)) {
             updated.add("偏好");
         }
+        if (hasCompanionSignal(lower)) {
+            updated.add("同行人");
+        }
 
         if (updated.isEmpty()) {
             return "收到。";
@@ -288,6 +303,35 @@ public class ConversationTool implements UnifiedAgentTool {
                 || message.contains("景点")
                 || message.contains("museum")
                 || message.contains("food");
+    }
+
+    private boolean hasCompanionSignal(String message) {
+        return message.contains("同行")
+                || message.contains("一个人")
+                || message.contains("独自")
+                || message.contains("情侣")
+                || message.contains("爱人")
+                || message.contains("伴侣")
+                || message.contains("家庭")
+                || message.contains("亲子")
+                || message.contains("家人")
+                || message.contains("朋友")
+                || message.contains("solo")
+                || message.contains("couple")
+                || message.contains("family")
+                || message.contains("friends");
+    }
+
+    private String formatCompanionType(TravelIntent.CompanionType companionType) {
+        if (companionType == null) {
+            return "未提供";
+        }
+        return switch (companionType) {
+            case SOLO -> "独自";
+            case COUPLE -> "情侣";
+            case FAMILY -> "家庭";
+            case FRIENDS -> "朋友";
+        };
     }
 
     private Set<String> parseMissingFields(String routeReason) {

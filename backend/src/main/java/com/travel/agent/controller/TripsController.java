@@ -111,14 +111,19 @@ public class TripsController {
         
         TripStatusResponse response = new TripStatusResponse();
         response.setTripId(tripId);
-        response.setStatus(trip.getStatus());
         
         // 从 Redis 获取进度
         Integer progress = itineraryGenerationService.getGenerationProgress(tripId);
         String currentStep = itineraryGenerationService.getCurrentStep(tripId);
+        String redisStatus = itineraryGenerationService.getGenerationStatus(tripId);
+        String effectiveStatus = (redisStatus != null && !redisStatus.isBlank()) ? redisStatus : trip.getStatus();
         
+        response.setStatus(effectiveStatus);
         response.setProgress(progress);
         response.setCurrentStep(currentStep);
+        if ("failed".equalsIgnoreCase(effectiveStatus)) {
+            response.setErrorMessage(itineraryGenerationService.getGenerationErrorMessage(tripId));
+        }
         
         return CommonResponse.success(response);
     }

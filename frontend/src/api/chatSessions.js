@@ -1,4 +1,4 @@
-import request from "@/utils/request"
+import request from './request'
 
 export const listChatSessions = (userId, limit = 30) => {
   return request({
@@ -31,4 +31,3 @@ export const deleteChatSession = (userId, sessionId) => {
     params: { userId }
   })
 }
-

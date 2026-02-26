@@ -419,12 +419,12 @@ const fetchTrip = async () => {
     
     console.log('✅ 调用API获取行程...')
     // 添加时间戳参数避免缓存
-    const res = await getTripById(tripId)
-    console.log('✅ API响应:', res)
-    console.log('📊 行程数据详情:', JSON.stringify(res?.data, null, 2))
+    const tripData = await getTripById(tripId)
+    console.log('✅ API响应:', tripData)
+    console.log('📊 行程数据详情:', JSON.stringify(tripData, null, 2))
     
-    if (res && res.data) {
-      trip.value = res.data
+    if (tripData) {
+      trip.value = tripData
       console.log('✅ 行程数据加载成功:', trip.value)
       
       // 对每个天的活动按时间排序
@@ -447,7 +447,7 @@ const fetchTrip = async () => {
         // 不返回，让用户看到空状态
       }
     } else {
-      console.error('❌ API返回数据格式错误:', res)
+      console.error('❌ API返回数据格式错误:', tripData)
       ElMessage.error('Failed to fetch trip data')
     }
   } catch (error) {
@@ -523,18 +523,18 @@ const handleOptimize = async () => {
     // 异步调用，不阻塞UI
     optimizeItinerary(route.params.tripId, {
       optimizationType: 'general'
-    }).then(res => {
-      console.log('✅ AI优化响应:', res)
+    }).then(data => {
+      console.log('✅ AI优化响应:', data)
       
       // 解析响应数据
-      if (res && res.data) {
+      if (data) {
         // 如果返回的是OptimizeResponse格式
-        if (res.data.changes && res.data.changes.length > 0) {
+        if (data.changes && data.changes.length > 0) {
           // 前端二次去重（防止后端遗漏，更严格的去重）
           const seen = new Set()
           const tempSuggestions = []
           
-          res.data.changes.forEach((change, idx) => {
+          data.changes.forEach((change, idx) => {
             const reason = (change.reason || '').trim()
             if (!reason) return
             
@@ -577,20 +577,20 @@ const handleOptimize = async () => {
           
           optimizationSuggestions.value = tempSuggestions
           console.log('✅ 处理后的建议数量:', optimizationSuggestions.value.length)
-        } else if (res.data.suggestions && res.data.suggestions.length > 0) {
+        } else if (data.suggestions && data.suggestions.length > 0) {
           // 对suggestions也去重
           const seen = new Set()
-          optimizationSuggestions.value = res.data.suggestions.filter(s => {
+          optimizationSuggestions.value = data.suggestions.filter(s => {
             const key = (s.title || s.description || '').trim().toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ')
             if (seen.has(key)) return false
             seen.add(key)
             return true
           })
-        } else if (res.data.aiExplanation) {
+        } else if (data.aiExplanation) {
           optimizationSuggestions.value = [{
             id: 0,
             title: 'AI Analysis',
-            description: res.data.aiExplanation
+            description: data.aiExplanation
           }]
         }
       }
@@ -620,22 +620,14 @@ const handleSave = async () => {
   try {
     loading.value = true
     
-    const res = await saveItineraryEdit(route.params.tripId, {
-      editSummary: 'User edited itinerary',
-      days: trip.value.days
-    })
-    
-    if (res.code === 200) {
-      ElMessage.success('Itinerary saved successfully')
-      // 重新加载行程数据以显示最新更改
-      await fetchTrip()
-      // 等待1秒后返回总览页面
-      setTimeout(() => {
-        handleBack()
-      }, 1000)
-    } else {
-      ElMessage.error(res.message || 'Failed to save')
-    }
+    await saveItineraryEdit(route.params.tripId, 'User edited itinerary')
+    ElMessage.success('Itinerary saved successfully')
+    // 重新加载行程数据以显示最新更改
+    await fetchTrip()
+    // 等待1秒后返回总览页面
+    setTimeout(() => {
+      handleBack()
+    }, 1000)
   } catch (error) {
     console.error('保存失败:', error)
     ElMessage.error('Failed to save: ' + (error.message || 'Unknown error'))
@@ -725,7 +717,7 @@ const submitAdd = async () => {
       activityName: addForm.value.activityName
     })
     
-    const res = await addActivity(route.params.tripId, {
+    const createdActivity = await addActivity(route.params.tripId, {
       dayId: addForm.value.dayId,
       activityName: addForm.value.activityName,
       activityType: addForm.value.activityType,
@@ -736,22 +728,15 @@ const submitAdd = async () => {
       notes: addForm.value.notes
     })
     
-    console.log('✅ 添加活动响应:', res)
+    console.log('✅ 添加活动响应:', createdActivity)
+    ElMessage.success('Activity added successfully!')
+    addDialogVisible.value = false
     
-    // 检查响应是否成功
-    if (res && (res.code === 200 || res.code === undefined || res.data)) {
-      ElMessage.success('Activity added successfully!')
-      addDialogVisible.value = false
-      
-      // 强制刷新：延迟一小段时间确保后端更新完成，然后重新加载数据
-      await new Promise(resolve => setTimeout(resolve, 300))
-      await fetchTrip()
-      
-      console.log('🔄 数据已刷新，新活动已添加并已按时间排序')
-    } else {
-      console.error('响应格式异常:', res)
-      ElMessage.error(res?.message || 'Failed to add activity')
-    }
+    // 强制刷新：延迟一小段时间确保后端更新完成，然后重新加载数据
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await fetchTrip()
+    
+    console.log('🔄 数据已刷新，新活动已添加并已按时间排序')
   } catch (error) {
     console.error('添加活动失败:', error)
     console.error('错误详情:', error.response || error.message)
@@ -827,7 +812,7 @@ const submitEdit = async () => {
       activityName: editForm.value.activityName
     })
     
-    const res = await updateActivity(route.params.tripId, editForm.value.activityId, {
+    const updatedActivity = await updateActivity(route.params.tripId, editForm.value.activityId, {
       activityName: editForm.value.activityName,
       activityType: editForm.value.activityType,
       startTime: editForm.value.startTime,
@@ -837,23 +822,16 @@ const submitEdit = async () => {
       notes: editForm.value.notes
     })
     
-    console.log('✅ 更新活动响应:', res)
-
-    // 检查响应是否成功
-    if (res && (res.code === 200 || res.code === undefined || res.data)) {
-      ElMessage.success('Activity updated successfully!')
-      editDialogVisible.value = false
-      
-      // 强制刷新：延迟一小段时间确保后端更新完成，然后重新加载数据
-      await new Promise(resolve => setTimeout(resolve, 300))
-      await fetchTrip()
-      
-      // 数据加载后会自动排序（在fetchTrip中处理）
-      console.log('🔄 数据已刷新，活动已按时间排序')
-    } else {
-      console.error('响应格式异常:', res)
-      ElMessage.error(res?.message || 'Failed to update activity')
-    }
+    console.log('✅ 更新活动响应:', updatedActivity)
+    ElMessage.success('Activity updated successfully!')
+    editDialogVisible.value = false
+    
+    // 强制刷新：延迟一小段时间确保后端更新完成，然后重新加载数据
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await fetchTrip()
+    
+    // 数据加载后会自动排序（在fetchTrip中处理）
+    console.log('🔄 数据已刷新，活动已按时间排序')
   } catch (error) {
     console.error('更新活动失败:', error)
     console.error('错误详情:', error.response || error.message)
@@ -874,15 +852,10 @@ const handleDeleteActivity = async (activity) => {
       return
     }
     
-    const res = await deleteActivity(route.params.tripId, activityId)
-    
-    if (res.code === 200) {
-      ElMessage.success(`Deleted: ${activity.activityName}`)
-      // 重新加载行程以显示最新更改
-      await fetchTrip()
-    } else {
-      ElMessage.error(res.message || 'Failed to delete activity')
-    }
+    await deleteActivity(route.params.tripId, activityId)
+    ElMessage.success(`Deleted: ${activity.activityName}`)
+    // 重新加载行程以显示最新更改
+    await fetchTrip()
   } catch (error) {
     console.error('删除失败:', error)
     ElMessage.error('Failed to delete activity: ' + (error.message || 'Unknown error'))
@@ -922,23 +895,18 @@ const submitNewDay = async () => {
     const tripId = route.params.tripId
     console.log('提交新天 - tripId:', tripId, 'data:', newDayForm.value)
     
-    const res = await addNewDay(tripId, {
+    const newDay = await addNewDay(tripId, {
       dayNumber: newDayForm.value.dayNumber,
       date: newDayForm.value.date || null,
       theme: newDayForm.value.theme || ''
     })
     
-    console.log('添加新天响应:', res)
-    
-    if (res && res.code === 200) {
-      ElMessage.success('New day added successfully!')
-      addDayDialogVisible.value = false
-      resetNewDayForm()
-      // 重新加载行程数据
-      await fetchTrip()
-    } else {
-      ElMessage.error(res?.message || 'Failed to add new day')
-    }
+    console.log('添加新天响应:', newDay)
+    ElMessage.success('New day added successfully!')
+    addDayDialogVisible.value = false
+    resetNewDayForm()
+    // 重新加载行程数据
+    await fetchTrip()
   } catch (error) {
     console.error('添加新天失败:', error)
     const errorMsg = error.response?.data?.message || error.response?.data?.error || error.message || 'Unknown error'
@@ -956,13 +924,8 @@ const handleUpdateDayDate = async (day) => {
       ElMessage.error('Cannot get day ID')
       return
     }
-    const res = await updateDayDate(route.params.tripId, dayId, day.date)
-    
-    if (res && res.code === 200) {
-      ElMessage.success('Date updated successfully')
-    } else {
-      ElMessage.error(res?.message || 'Failed to update date')
-    }
+    await updateDayDate(route.params.tripId, dayId, day.date)
+    ElMessage.success('Date updated successfully')
   } catch (error) {
     console.error('更新日期失败:', error)
     ElMessage.error('Failed to update date: ' + (error.response?.data?.message || error.message || 'Unknown error'))
@@ -997,16 +960,12 @@ const handleDeleteDay = async (day) => {
     }
     
     console.log('调用deleteDay API - tripId:', tripId, 'dayId:', dayId)
-    const res = await deleteDay(tripId, dayId)
-    console.log('删除天的响应:', res)
+    const deletedDay = await deleteDay(tripId, dayId)
+    console.log('删除天的响应:', deletedDay)
     
-    if (res && res.code === 200) {
-      ElMessage.success(`Day ${day.dayNumber} deleted successfully`)
-      // 重新加载行程数据
-      await fetchTrip()
-    } else {
-      ElMessage.error(res?.message || 'Failed to delete day')
-    }
+    ElMessage.success(`Day ${day.dayNumber} deleted successfully`)
+    // 重新加载行程数据
+    await fetchTrip()
   } catch (error) {
     if (error !== 'cancel') {
       console.error('删除天失败:', error)
@@ -1231,4 +1190,3 @@ onMounted(() => {
   gap: 5px;
 }
 </style>
-

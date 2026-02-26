@@ -10,7 +10,7 @@
 
 **AI 旅行规划平台**
 
-采用 ReAct 决策循环与 LangGraph4j 状态机编排，实现智能对话、目的地推荐与行程生成
+采用结构化意图抽取 + 确定性路由 + LangGraph4j 状态机编排，实现对话、推荐与行程生成闭环
 
 [特性](#核心特性) • [架构](#系统架构) • [快速开始](#快速启动) • [性能](#性能指标) • [监控](#监控系统)
 
@@ -33,27 +33,30 @@
 ## 核心特性
 
 ### 智能 Agent 架构
-- **ReAct 决策循环**：UnifiedReActAgent 自主推理与行动，动态选择工具执行
-- **工具编排**：管理对话、推荐、行程生成三大工具，支持工具链式调用
-- **上下文管理**：Redis 持久化对话历史，支持多轮对话与上下文理解
-- **三层超时控制**：Agent 总超时 90s、LLM 超时 20s、工具超时 30s，防止请求卡死
+- **当前主链路**：`UnifiedReActAgent` 采用 `StructuredIntentExtractor → IntentRouter → ToolRegistry.execute` 的单次决策执行模式
+- **工具治理**：统一管理 `conversation / recommend_destinations / generate_itinerary` 三类工具，支持工具级超时与错误兜底
+- **上下文管理**：`AgentStateStore` + Redis 持久化会话状态，支持多轮对话上下文
+- **三层超时控制**：Agent 总超时、LLM 超时、工具超时，防止请求卡死
 - **五层安全防护**：输入验证 → 恶意检测 → 内容净化 → Prompt 转义 → 日志脱敏
 
 ### LangGraph 状态机工作流
-- **推荐流程**：5 节点状态机（意图分析 → RAG 检索 → 区域过滤 → AI 排序选择 → 生成推荐理由）
-- **行程流程**：6 节点主链路（任务规划 → RAG 检索 → 预算验证 → 行程生成 → 质量反思 → 保存）
-- **异步后处理**：保存后后台执行地理编码等非阻塞任务，不影响主链路完成返回
-- **状态追踪**：状态可追踪、可回溯，便于排障与观测
+- **推荐流程（5 节点）**：意图分析 → AI 生成候选 → 区域过滤 → 排序选择 → 生成推荐理由
+- **推荐结果 Top3**：`RankAndSelectNode` 固定输出 Top 3 推荐
+- **行程流程（6 节点）**：任务规划 → RAG 检索 → 预算验证 → 行程生成 → 质量反思 → 保存
+- **可选路线优化**：开启 `agent.route-optimization.enabled=true` 时插入 `route_optimization` 节点
+- **异步后处理**：主链路保存完成后，后台继续地理编码和路线优化，不阻塞前端查看行程
 
 ### RAG 增强检索
-- **向量检索**：Chroma 存储真实景点数据，语义搜索相关信息
-- **减少幻觉**：基于真实数据生成推荐，避免 AI 编造不存在的景点
+- **向量检索**：Chroma 存储旅行知识库，行程生成流程通过 `RAGSearchTool` 检索真实景点信息
+- **阈值过滤**：仅保留相似度 `score > 0.7` 的检索结果
+- **减少幻觉**：基于真实知识片段生成活动建议，降低编造内容风险
 - **知识库管理**：支持动态导入旅游指南，自动向量化存储
 
-### 高性能缓存
-- **多层缓存**：Redis 缓存行程、推荐结果、地理编码数据
-- **性能提升**：缓存命中后响应时间降低 **88.7%**，速度提升 **8.85 倍**
-- **智能失效**：基于 TTL 和事件驱动的缓存失效策略
+### 用户流程闭环
+- **核心流程**：`/plan/intent` → `/plan/destinations` → `/itinerary/progress/:tripId` → `/itinerary/overview` → `/itinerary/edit/:tripId`
+- **生成状态闭环**：`/api/trips/{tripId}/status` 返回 `status/progress/currentStep`，失败时返回 `errorMessage`
+- **编辑保存闭环**：`saveEdit` 将快照持久化到 `itinerary_versions` 并推进 `trips.current_version`
+- **API 契约统一**：前端统一以 `src/api/request.js` 作为唯一 request 语义，`src/utils/request.js` 保留兼容导出
 
 ### 企业级监控
 - **全链路追踪**：Micrometer + Prometheus 收集 Agent、LLM、RAG、缓存等所有指标
@@ -61,7 +64,7 @@
 - **智能告警**：Alertmanager 支持邮件、Slack、钉钉等多渠道告警
 
 ### 异步任务处理
-- **进度追踪**：Redis 实时追踪行程生成进度（10% → 100%）
+- **进度追踪**：Redis 实时追踪行程生成进度（0% → 100%）
 - **后台地理编码**：异步批量处理地理坐标查询，不阻塞主流程
 - **优雅降级**：主 AI 服务失败自动切换备用服务
 
@@ -95,7 +98,7 @@
 ### AI 模型
 | 模型 | 用途 | 特点 |
 |------|------|------|
-| **Gemini 2.5 Flash Lite** | 主要 LLM | 快速响应（~7s），成本低 |
+| **Gemini 2.5 Flash Lite** | 主要 LLM | 低成本、默认主模型 |
 | **GPT-4o Mini** | 备用 LLM | 高质量输出，自动降级 |
 | **text-embedding-3-small** | 向量嵌入 | 1536 维，语义检索 |
 
@@ -107,20 +110,20 @@
 └────────────────────────┬────────────────────────────────┘
                          │ REST API
 ┌────────────────────────┴────────────────────────────────┐
-│  Agent 决策层：UnifiedReActAgent + ToolRegistry        │
-│  ├─ ConversationTool (对话 + 意图分析)                 │
-│  ├─ RecommendationTool (LangGraph 推荐流)              │
-│  └─ ItineraryGenerationTool (LangGraph 行程流)         │
+│  Agent 决策层：UnifiedReActAgent                        │
+│  ├─ StructuredIntentExtractor（结构化意图抽取）         │
+│  ├─ IntentRouter（纯 Java 路由）                        │
+│  └─ ToolRegistry（对话 / 推荐 / 生成）                  │
 │                                                         │
-│  安全层：AgentConfig + InputSanitizer      │
+│  安全层：AgentConfig + InputSanitizer                  │
 │  ├─ 三层超时控制 (Agent/LLM/Tool)                     │
 │  └─ 五层安全防护 (验证/检测/净化/转义/脱敏)            │
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────┴────────────────────────────────┐
 │  编排层：LangGraph4j 状态机工作流                      │
-│  ├─ RecommendationGraph (5 节点)                       │
-│  └─ TravelPlanningGraph (默认 6 节点主链路)            │
+│  ├─ RecommendationGraph (5 节点, Top3 输出)            │
+│  └─ TravelPlanningGraph (主链 6 节点 + 可选路线优化)   │
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────┴────────────────────────────────┐
@@ -129,7 +132,8 @@
 └────────────────────────┬────────────────────────────────┘
                          │
 ┌────────────────────────┴────────────────────────────────┐
-│  数据层：PostgreSQL / Redis / Chroma / Gemini API      │
+│  数据层：PostgreSQL / Redis / Chroma                   │
+│  外部服务：Gemini / OpenAI / Mapbox / Geoapify         │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -139,7 +143,7 @@
 backend/    # Spring Boot 服务 + LangGraph Agent 核心
 ├── src/main/java/com/travel/agent/
 │   ├── ai/              # Agent、工具、状态机节点
-│   │   ├── agent/       # ReAct Agent 实现
+│   │   ├── agent/       # Unified Agent 主链路（含 legacy ReAct）
 │   │   ├── graph/       # LangGraph 工作流定义
 │   │   ├── nodes/       # 工作流节点实现
 │   │   ├── state/       # 状态对象
@@ -250,28 +254,14 @@ docker compose -f docker-compose-monitoring.yml up -d
 
 ## 性能指标
 
-### 缓存性能（实测数据）
+### 说明
 
-| 指标 | 无缓存 | 有缓存 | 提升 |
-|------|--------|--------|------|
-| **平均响应时间** | 8.85ms | 1.0ms | **↓ 88.7%** |
-| **速度倍数** | 1x | **8.85x** | - |
-| **总耗时（20次）** | 177ms | 20ms | **↓ 88.7%** |
-
-### 系统容量
-
-- **并发支持**：1000+ QPS（基于缓存优化）
-- **响应时间**：P95 < 100ms（缓存命中）
-- **缓存命中率**：90-95%（推算）
-- **内存占用**：~60 MB（30 天运行）
-- **磁盘占用**：~26 MB（Prometheus 30 天数据）
-
-### LLM 性能
-
-| 模型 | 平均响应时间 | Token 消耗 | 成本 |
-|------|-------------|-----------|------|
-| **Gemini 2.5 Flash Lite** | ~7s | ~2000 tokens | 低 |
-| **GPT-4o Mini** | ~15s | ~2500 tokens | 中 |
+- 性能受模型提供商、网络延迟、知识库规模与缓存命中率影响较大。
+- 本项目已内置 Micrometer 指标，可通过 Prometheus/Grafana 按环境实时观测：
+  - Agent 执行耗时与成功率
+  - LLM 调用耗时与 Token 消耗
+  - RAG 检索耗时与相似度分布
+  - Redis 缓存命中/未命中
 
 ## 监控系统
 

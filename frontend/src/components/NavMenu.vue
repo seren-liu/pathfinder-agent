@@ -210,12 +210,12 @@ const goToCurrentTrip = async () => {
   }
   
   try {
-    const res = await getLatestTrip(userStore.userId)
-    if (res.data) {
+    const latestTripId = await getLatestTrip(userStore.userId)
+    if (latestTripId) {
       // 有最新行程，直接跳转到 Overview
       router.push({
         path: '/itinerary/overview',
-        query: { tripId: res.data }
+        query: { tripId: latestTripId }
       })
     } else {
       // 没有行程，提示用户

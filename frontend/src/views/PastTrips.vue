@@ -107,13 +107,8 @@ const fetchTrips = async () => {
       return
     }
 
-    const res = await getUserTrips(userStore.userId)
-    if (res && res.code === 200) {
-      trips.value = res.data || []
-    } else {
-      ElMessage.error(res?.message || 'Failed to load trips')
-      trips.value = []
-    }
+    const tripList = await getUserTrips(userStore.userId)
+    trips.value = Array.isArray(tripList) ? tripList : []
   } catch (error) {
     console.error('Failed to fetch trips:', error)
     ElMessage.error('Failed to load trips')
@@ -284,4 +279,3 @@ onMounted(() => {
   }
 }
 </style>
-

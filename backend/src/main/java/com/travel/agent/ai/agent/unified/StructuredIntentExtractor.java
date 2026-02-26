@@ -41,6 +41,10 @@ public class StructuredIntentExtractor {
                 "budget": { "type": ["string", "null"] },
                 "interests": { "type": "array", "items": { "type": "string" } },
                 "mood": { "type": ["string", "null"] },
+                "companion_type": {
+                  "type": ["string", "null"],
+                  "enum": ["solo", "couple", "family", "friends", "unknown", null]
+                },
                 "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
                 "user_goal": {
                   "type": "string",
@@ -54,6 +58,7 @@ public class StructuredIntentExtractor {
                 "budget",
                 "interests",
                 "mood",
+                "companion_type",
                 "confidence",
                 "user_goal"
               ]
@@ -70,6 +75,7 @@ public class StructuredIntentExtractor {
             "(玩|待|住|安排|规划|行程|旅行)\\s*(\\d{1,2})\\s*日"
     );
     private static final Set<String> COUNTRY_TOKENS = buildCountryTokens();
+    private static final Set<String> REGION_TOKENS = buildRegionTokens();
 
     private final AIService aiService;
     private final ObjectMapper objectMapper;
@@ -115,7 +121,8 @@ public class StructuredIntentExtractor {
                 2) Use integers for days.
                 3) Keep budget as a short string (e.g. "8000", "10000").
                 4) interests must be an array (empty array allowed).
-                5) travel_related=false only for non-travel casual chat.
+                5) companion_type should be one of: solo/couple/family/friends/unknown/null.
+                6) travel_related=false only for non-travel casual chat.
                 """.formatted(userMessage, previous);
     }
 
@@ -127,6 +134,7 @@ public class StructuredIntentExtractor {
                 .budget(base.getBudget())
                 .interests(base.getInterests() != null ? new ArrayList<>(base.getInterests()) : new ArrayList<>())
                 .mood(base.getMood())
+                .companionType(base.getCompanionType())
                 .confidence(base.getConfidence())
                 .type(base.getType())
                 .needsRecommendation(base.getNeedsRecommendation())
@@ -163,6 +171,16 @@ public class StructuredIntentExtractor {
             builder.mood(payload.mood.trim());
         }
 
+        TravelIntent.CompanionType explicitCompanion = extractExplicitCompanionTypeFromMessage(userMessage);
+        if (explicitCompanion != null) {
+            builder.companionType(explicitCompanion);
+        } else {
+            TravelIntent.CompanionType extractedCompanion = normalizeCompanionType(payload.companionType);
+            if (extractedCompanion != null) {
+                builder.companionType(extractedCompanion);
+            }
+        }
+
         Double confidence = payload.confidence != null ? payload.confidence : base.getConfidence();
         builder.confidence(clampConfidence(confidence));
 
@@ -173,6 +191,7 @@ public class StructuredIntentExtractor {
 
     private void applyDeterministicFlags(TravelIntent intent, Boolean travelRelated) {
         boolean hasDestination = isMeaningful(intent.getDestination());
+        boolean hasCompanion = intent.getCompanionType() != null;
         boolean clearDestination = hasDestination
                 && !isVagueDestination(intent.getDestination())
                 && !isCountryLevelDestination(intent.getDestination());
@@ -180,7 +199,7 @@ public class StructuredIntentExtractor {
                 || isMeaningful(intent.getMood())
                 || intent.getDays() != null
                 || isMeaningful(intent.getBudget());
-        boolean hasTravelSignals = hasDestination || hasPreferences || Boolean.TRUE.equals(travelRelated);
+        boolean hasTravelSignals = hasDestination || hasPreferences || hasCompanion || Boolean.TRUE.equals(travelRelated);
 
         if (!hasTravelSignals) {
             intent.setType(TravelIntent.IntentType.GENERAL_CHAT);
@@ -213,7 +232,69 @@ public class StructuredIntentExtractor {
                 || payload.days != null
                 || isMeaningful(payload.budget)
                 || (payload.interests != null && !payload.interests.isEmpty())
-                || isMeaningful(payload.mood);
+                || isMeaningful(payload.mood)
+                || normalizeCompanionType(payload.companionType) != null;
+    }
+
+    private TravelIntent.CompanionType normalizeCompanionType(String rawCompanionType) {
+        if (!isMeaningful(rawCompanionType)) {
+            return null;
+        }
+
+        String normalized = rawCompanionType.trim().toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "solo", "single", "alone", "独自", "独行", "一个人" -> TravelIntent.CompanionType.SOLO;
+            case "couple", "romantic", "情侣", "爱人", "伴侣", "夫妻" -> TravelIntent.CompanionType.COUPLE;
+            case "family", "家庭", "亲子", "带娃", "家人" -> TravelIntent.CompanionType.FAMILY;
+            case "friends", "friend", "朋友", "闺蜜" -> TravelIntent.CompanionType.FRIENDS;
+            default -> null;
+        };
+    }
+
+    private TravelIntent.CompanionType extractExplicitCompanionTypeFromMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+
+        String lower = message.toLowerCase(Locale.ROOT);
+        if (lower.contains("家庭")
+                || lower.contains("一家")
+                || lower.contains("家人")
+                || lower.contains("亲子")
+                || lower.contains("带娃")
+                || lower.contains("父母")
+                || lower.contains("孩子")) {
+            return TravelIntent.CompanionType.FAMILY;
+        }
+        if (lower.contains("情侣")
+                || lower.contains("爱人")
+                || lower.contains("伴侣")
+                || lower.contains("对象")
+                || lower.contains("男朋友")
+                || lower.contains("女朋友")
+                || lower.contains("老公")
+                || lower.contains("老婆")
+                || lower.contains("夫妻")
+                || lower.contains("honeymoon")
+                || lower.contains("romantic")) {
+            return TravelIntent.CompanionType.COUPLE;
+        }
+        if (lower.contains("独自")
+                || lower.contains("独行")
+                || lower.contains("一个人")
+                || lower.contains("solo")
+                || lower.contains("alone")) {
+            return TravelIntent.CompanionType.SOLO;
+        }
+        if (lower.contains("朋友")
+                || lower.contains("闺蜜")
+                || lower.contains("哥们")
+                || lower.contains("同事")
+                || lower.contains("buddy")
+                || lower.contains("friends")) {
+            return TravelIntent.CompanionType.FRIENDS;
+        }
+        return null;
     }
 
     private String normalizeDestination(String destination) {
@@ -320,6 +401,7 @@ public class StructuredIntentExtractor {
 
     private boolean isVagueDestination(String destination) {
         String lower = destination.toLowerCase(Locale.ROOT);
+        String normalized = normalizeGeoToken(destination);
         String[] vague = {
                 "europe", "asia", "africa", "america", "oceania",
                 "欧洲", "亚洲", "非洲", "美洲", "大洋洲",
@@ -331,7 +413,46 @@ public class StructuredIntentExtractor {
                 return true;
             }
         }
-        return false;
+        if (REGION_TOKENS.contains(normalized)) {
+            return true;
+        }
+        if (lower.contains("地区") || lower.contains("区域")) {
+            return true;
+        }
+        if (containsDirectionalRegionSignal(lower)) {
+            return true;
+        }
+        return looksLikeSubRegion(normalized);
+    }
+
+    private boolean containsDirectionalRegionSignal(String lower) {
+        // 中文方位区域表达：如“美国东部/日本关西/法国南部”
+        if (lower.contains("东部")
+                || lower.contains("西部")
+                || lower.contains("南部")
+                || lower.contains("北部")
+                || lower.contains("中部")
+                || lower.contains("东北")
+                || lower.contains("西北")
+                || lower.contains("东南")
+                || lower.contains("西南")) {
+            return true;
+        }
+
+        // 英文方位区域表达：如“east coast”, “northern italy”, “west us”
+        return lower.matches(".*\\b(east|west|north|south|central|northeast|northwest|southeast|southwest)\\b.*");
+    }
+
+    private boolean looksLikeSubRegion(String normalized) {
+        if (normalized == null || normalized.isBlank()) {
+            return false;
+        }
+        // 例如：东南亚、东亚、北欧、拉美等区域级表达
+        return normalized.length() <= 3
+                && (normalized.endsWith("亚")
+                || normalized.endsWith("欧")
+                || normalized.endsWith("美")
+                || normalized.endsWith("非"));
     }
 
     private boolean isCountryLevelDestination(String destination) {
@@ -368,6 +489,22 @@ public class StructuredIntentExtractor {
         return tokens;
     }
 
+    private static Set<String> buildRegionTokens() {
+        Set<String> tokens = new HashSet<>();
+        String[] regionAliases = {
+                "southeast asia", "south east asia",
+                "east asia", "south asia", "central asia", "west asia",
+                "middle east", "latin america", "north africa",
+                "eastern europe", "western europe", "northern europe", "southern europe",
+                "东南亚", "东亚", "南亚", "西亚", "中亚", "东北亚",
+                "中东", "拉美", "北非", "西欧", "东欧", "北欧", "南欧"
+        };
+        for (String alias : regionAliases) {
+            addCountryToken(tokens, alias);
+        }
+        return tokens;
+    }
+
     private static void addCountryToken(Set<String> tokens, String raw) {
         if (raw == null || raw.isBlank()) {
             return;
@@ -392,6 +529,8 @@ public class StructuredIntentExtractor {
         public String budget;
         public List<String> interests;
         public String mood;
+        @JsonProperty("companion_type")
+        public String companionType;
         public Double confidence;
         @JsonProperty("user_goal")
         public String userGoal;

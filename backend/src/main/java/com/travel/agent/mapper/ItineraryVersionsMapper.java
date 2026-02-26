@@ -13,4 +13,8 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
  */
 public interface ItineraryVersionsMapper extends BaseMapper<ItineraryVersions> {
 
+    /**
+     * PostgreSQL jsonb insert（避免将 JSON 参数按 varchar 写入 jsonb 列）
+     */
+    int insertJsonb(ItineraryVersions itineraryVersion);
 }

@@ -1,4 +1,4 @@
-import request from '@/utils/request'
+import request from './request'
 
 /**
  * 保存目的地到数据库

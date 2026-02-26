@@ -116,6 +116,8 @@ langchain4j:
 
   # 向量数据库配置
   chroma:
+    enabled: true
+    fail-fast: false
     base-url: http://localhost:8000
     collection-name: travel_destinations
     timeout: 10s

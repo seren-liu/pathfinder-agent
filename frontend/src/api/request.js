@@ -42,14 +42,25 @@ request.interceptors.request.use(
 request.interceptors.response.use(
   response => {
     const res = response.data
-    
-    // 检查响应码
-    if (res.code === 200) {
-      return res.data // 直接返回 data 部分
-    } else {
-      ElMessage.error(res.message || 'Request failed')
-      return Promise.reject(new Error(res.message || 'Error'))
+
+    // 统一契约：
+    // 1) CommonResponse(code/data/message) -> code=200 返回 data，其余 reject
+    // 2) 非 CommonResponse（无 code） -> 直接返回原始 data
+    if (res && typeof res === 'object' && Object.prototype.hasOwnProperty.call(res, 'code')) {
+      if (res.code === 200) {
+        return res.data
+      }
+
+      const message = res.message || 'Request failed'
+      ElMessage.error(message)
+      const error = new Error(message)
+      error.name = 'ApiBusinessError'
+      error.response = response
+      error.code = res.code
+      return Promise.reject(error)
     }
+
+    return res
   },
   error => {
     console.error('Response error:', error)
@@ -64,7 +75,16 @@ request.interceptors.response.use(
           break
         case 401:
           ElMessage.error('Unauthorized, please login')
-          // 可以在这里清除用户状态并跳转到登录页
+          try {
+            const userStore = useUserStore()
+            userStore.clearUser()
+          } catch (e) {
+            localStorage.removeItem('token')
+            localStorage.removeItem('userId')
+          }
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login'
+          }
           break
         case 404:
           ElMessage.error('Resource not found')
@@ -86,4 +106,3 @@ request.interceptors.response.use(
 )
 
 export default request
-

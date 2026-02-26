@@ -98,13 +98,7 @@ public class AIController {
             
             // 将预算字符串转换为等级
             if (request.getBudget() != null) {
-                try {
-                    int budgetValue = Integer.parseInt(request.getBudget());
-                    int budgetLevel = budgetValue < 5000 ? 1 : (budgetValue < 15000 ? 2 : 3);
-                    parsedIntent.setBudgetLevel(budgetLevel);
-                } catch (NumberFormatException e) {
-                    parsedIntent.setBudgetLevel(2); // 默认中等预算
-                }
+                parsedIntent.setBudgetLevel(parseBudgetLevel(request.getBudget()));
             } else {
                 parsedIntent.setBudgetLevel(2); // 默认中等预算
             }
@@ -140,5 +134,27 @@ public class AIController {
                 request.getUserId(), request.getExcludeIds());
 
         return recommendDestinations(request);
+    }
+
+    private int parseBudgetLevel(String budget) {
+        if (budget == null || budget.isBlank()) {
+            return 2;
+        }
+        try {
+            String digits = budget.replaceAll("[^0-9]", "");
+            if (digits.isBlank()) {
+                return 2;
+            }
+            int budgetValue = Integer.parseInt(digits);
+            if (budgetValue < 5000) {
+                return 1;
+            }
+            if (budgetValue < 15000) {
+                return 2;
+            }
+            return 3;
+        } catch (Exception e) {
+            return 2;
+        }
     }
 }

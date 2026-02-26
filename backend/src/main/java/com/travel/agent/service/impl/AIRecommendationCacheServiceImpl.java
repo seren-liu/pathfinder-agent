@@ -15,8 +15,11 @@ import org.springframework.util.DigestUtils;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * AI 推荐缓存服务实现
@@ -141,16 +144,29 @@ public class AIRecommendationCacheServiceImpl implements AIRecommendationCacheSe
 
     @Override
     public String generateIntentHash(ParseIntentResponse intent) {
-        // 将意图关键信息拼接成字符串
-        String intentStr = String.format("%s|%s|%s|%d|%d",
-                intent.getMood() != null ? intent.getMood() : "",
-                intent.getKeywords() != null ? String.join(",", intent.getKeywords()) : "",
-                intent.getPreferredFeatures() != null ? String.join(",", intent.getPreferredFeatures()) : "",
-                intent.getBudgetLevel() != null ? intent.getBudgetLevel() : 0,
-                intent.getEstimatedDuration() != null ? intent.getEstimatedDuration() : 0
+        if (intent == null) {
+            return DigestUtils.md5DigestAsHex("default_intent".getBytes());
+        }
+
+        String destination = normalizeText(intent.getDestination());
+        String mood = normalizeText(defaultIfBlank(intent.getMood(), "relaxing"));
+
+        Set<String> normalizedFeatures = new TreeSet<>();
+        normalizedFeatures.addAll(normalizeTokens(intent.getKeywords()));
+        normalizedFeatures.addAll(normalizeTokens(intent.getPreferredFeatures()));
+
+        int budgetLevel = normalizeBudgetLevel(intent.getBudgetLevel());
+        int durationDays = normalizeDuration(intent.getEstimatedDuration());
+
+        String intentStr = String.format(
+                "dest=%s|mood=%s|features=%s|budget=%d|days=%d",
+                destination,
+                mood,
+                String.join(",", normalizedFeatures),
+                budgetLevel,
+                durationDays
         );
 
-        // 使用 MD5 生成哈希
         return DigestUtils.md5DigestAsHex(intentStr.getBytes());
     }
 
@@ -174,5 +190,56 @@ public class AIRecommendationCacheServiceImpl implements AIRecommendationCacheSe
      */
     private String getCacheKey(Long userId, String sessionId, String intentHash) {
         return String.format("ai:recommendations:%d:%s:%s", userId, sessionId, intentHash);
+    }
+
+    private String defaultIfBlank(String value, String defaultValue) {
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+        return value;
+    }
+
+    private int normalizeBudgetLevel(Integer budgetLevel) {
+        if (budgetLevel == null) {
+            return 2;
+        }
+        if (budgetLevel < 1) {
+            return 1;
+        }
+        if (budgetLevel > 3) {
+            return 3;
+        }
+        return budgetLevel;
+    }
+
+    private int normalizeDuration(Integer days) {
+        if (days == null || days <= 0) {
+            return 5;
+        }
+        return Math.min(days, 30);
+    }
+
+    private List<String> normalizeTokens(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalized = new ArrayList<>();
+        for (String value : values) {
+            String token = normalizeText(value);
+            if (!token.isEmpty()) {
+                normalized.add(token);
+            }
+        }
+        return normalized;
+    }
+
+    private String normalizeText(String value) {
+        if (value == null) {
+            return "";
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        normalized = normalized.replaceAll("[\\p{Punct}]+", " ");
+        normalized = normalized.replaceAll("\\s+", " ").trim();
+        return normalized;
     }
 }

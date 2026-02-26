@@ -63,11 +63,11 @@ const startPolling = () => {
   pollingTimer = setInterval(async () => {
     try {
       const tripId = route.query.tripId
-      const res = await getTripStatus(tripId)
+      const data = await getTripStatus(tripId)
       
-      progress.value = res.data.progress || 0
-      currentStep.value = res.data.currentStep || 'Processing...'
-      status.value = res.data.status
+      progress.value = data.progress || 0
+      currentStep.value = data.currentStep || 'Processing...'
+      status.value = data.status
       
       // 生成完成
       if (status.value === 'completed') {

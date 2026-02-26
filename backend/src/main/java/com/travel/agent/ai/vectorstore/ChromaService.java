@@ -8,9 +8,15 @@ import dev.langchain4j.store.embedding.EmbeddingMatch;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -20,6 +26,14 @@ public class ChromaService {
 
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final EmbeddingModel embeddingModel;
+    @Qualifier("taskExecutor")
+    private final Executor taskExecutor;
+
+    @Value("${agent.rag.embedding-timeout-ms:4000}")
+    private long embeddingTimeoutMs;
+
+    @Value("${agent.rag.embedding-max-retries:1}")
+    private int embeddingMaxRetries;
 
     /**
      * 添加文本到向量数据库
@@ -77,21 +91,43 @@ public class ChromaService {
      */
     public List<EmbeddingMatch<TextSegment>> search(String query, int maxResults) {
         log.info("Searching in Chroma: query='{}', maxResults={}", query, maxResults);
-        
-        // 1. 生成查询 Embedding
-        Embedding queryEmbedding = embeddingModel.embed(query).content();
-        
-        // 2. 搜索相似向量（使用新的search API）
-        dev.langchain4j.store.embedding.EmbeddingSearchRequest searchRequest = 
-            dev.langchain4j.store.embedding.EmbeddingSearchRequest.builder()
-                .queryEmbedding(queryEmbedding)
-                .maxResults(maxResults)
-                .build();
-        
-        List<EmbeddingMatch<TextSegment>> matches = embeddingStore.search(searchRequest).matches();
-        
-        log.info("✅ Found {} matches", matches.size());
-        return matches;
+
+        int totalAttempts = Math.max(1, embeddingMaxRetries + 1);
+        for (int attempt = 1; attempt <= totalAttempts; attempt++) {
+            try {
+                // 1. 快速生成查询 Embedding（超时即降级）
+                Embedding queryEmbedding = CompletableFuture
+                        .supplyAsync(() -> embeddingModel.embed(query).content(), taskExecutor)
+                        .orTimeout(embeddingTimeoutMs, TimeUnit.MILLISECONDS)
+                        .join();
+
+                // 2. 搜索相似向量（使用新的search API）
+                dev.langchain4j.store.embedding.EmbeddingSearchRequest searchRequest =
+                        dev.langchain4j.store.embedding.EmbeddingSearchRequest.builder()
+                                .queryEmbedding(queryEmbedding)
+                                .maxResults(maxResults)
+                                .build();
+
+                List<EmbeddingMatch<TextSegment>> matches = embeddingStore.search(searchRequest).matches();
+                log.info("✅ Found {} matches", matches.size());
+                return matches;
+            } catch (Exception e) {
+                Throwable cause = e instanceof CompletionException && e.getCause() != null ? e.getCause() : e;
+                boolean canRetry = attempt < totalAttempts;
+                log.warn(
+                        "Embedding query failed (attempt {}/{}): {}",
+                        attempt,
+                        totalAttempts,
+                        cause.getMessage()
+                );
+                if (!canRetry) {
+                    break;
+                }
+            }
+        }
+
+        log.warn("⚠️ Fallback to empty RAG results due to embedding failure: query='{}'", query);
+        return List.of();
     }
 
     /**

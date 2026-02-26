@@ -57,9 +57,17 @@ public class IntentRouter {
             // 信息已齐但用户尚未明确要求直接生成时：
             // - 目的地不明确（国家/大洲/模糊）=> 先推荐
             // - 目的地明确（城市/具体地点）=> 先确认是否直接生成行程
-            List<String> missingForRecommend = missingRecommendationFields(intent);
-            if (!itineraryGenerationRequested && missingForRecommend.isEmpty()) {
-                if (recommendationEligible) {
+            if (!itineraryGenerationRequested) {
+                if (!recommendationEligible) {
+                    return Decision.of(
+                            TOOL_CONVERSATION,
+                            "awaiting_itinerary_confirmation",
+                            AgentState.AgentPhase.COLLECTING_INFO
+                    );
+                }
+
+            List<String> missingForRecommend = missingRecommendationFields(state, intent);
+                if (missingForRecommend.isEmpty()) {
                     return Decision.of(
                             TOOL_RECOMMEND,
                             "itinerary_not_confirmed_recommendation_first",
@@ -68,7 +76,7 @@ public class IntentRouter {
                 }
                 return Decision.of(
                         TOOL_CONVERSATION,
-                        "awaiting_itinerary_confirmation",
+                        "missing_recommendation_fields:" + String.join(",", missingForRecommend),
                         AgentState.AgentPhase.COLLECTING_INFO
                 );
             }
@@ -86,7 +94,7 @@ public class IntentRouter {
                         AgentState.AgentPhase.COLLECTING_INFO
                 );
             }
-            List<String> missing = missingRecommendationFields(intent);
+            List<String> missing = missingRecommendationFields(state, intent);
             if (missing.isEmpty()) {
                 return Decision.of(TOOL_RECOMMEND, "intent_needs_recommendation", AgentState.AgentPhase.READY_FOR_RECOMMENDATION);
             }
@@ -100,14 +108,21 @@ public class IntentRouter {
         return Decision.of(TOOL_CONVERSATION, "need_more_information", AgentState.AgentPhase.COLLECTING_INFO);
     }
 
-    private List<String> missingRecommendationFields(TravelIntent intent) {
+    private List<String> missingRecommendationFields(AgentState state, TravelIntent intent) {
         List<String> missing = new ArrayList<>();
+        boolean hasDestination = isNotBlank(intent.getDestination());
         boolean hasPreferenceSignals = (intent.getInterests() != null && !intent.getInterests().isEmpty())
                 || isNotBlank(intent.getMood());
         boolean hasDuration = intent.getDays() != null;
         boolean hasBudget = isNotBlank(intent.getBudget());
 
-        if (!hasPreferenceSignals) {
+        // 首轮优先补偏好，避免“首句直接跳推荐”。
+        // 若已完成至少一轮对话且目的地+天数+预算齐全，则允许无偏好直接推荐。
+        boolean allowSkipPreferences = shouldAllowRecommendationWithoutPreferences(
+                state, hasDestination, hasDuration, hasBudget
+        );
+
+        if (!hasPreferenceSignals && !allowSkipPreferences) {
             missing.add("preferences");
         }
         if (!hasDuration) {
@@ -117,6 +132,19 @@ public class IntentRouter {
             missing.add("budget");
         }
         return missing;
+    }
+
+    private boolean shouldAllowRecommendationWithoutPreferences(
+            AgentState state,
+            boolean hasDestination,
+            boolean hasDuration,
+            boolean hasBudget
+    ) {
+        if (!hasDestination || !hasDuration || !hasBudget) {
+            return false;
+        }
+        Integer turns = state != null ? state.getConversationTurns() : null;
+        return turns != null && turns > 0;
     }
 
     private boolean hasItineraryInputs(TravelIntent intent, AgentState state, boolean explicitGenerateRequest) {
@@ -181,21 +209,8 @@ public class IntentRouter {
             return false;
         }
 
-        if (isAffirmativeStartMessage(message)) {
-            return true;
-        }
-
-        String previousRouteReason = getPreviousRouteReason(state);
-        if (!isNotBlank(previousRouteReason)) {
-            return false;
-        }
-
-        boolean wasCollectingCoreInfo = previousRouteReason.startsWith("missing_recommendation_fields:")
-                || "need_more_information".equals(previousRouteReason)
-                || "awaiting_itinerary_confirmation".equals(previousRouteReason)
-                || "clear_destination_skip_recommendation".equals(previousRouteReason);
-
-        return wasCollectingCoreInfo && hasSlotFillingSignals(message);
+        // 仅把明确的“开始/确认”话术视为隐式确认，避免用户补充预算/天数时被误触发行程生成。
+        return isAffirmativeStartMessage(message);
     }
 
     private boolean isAffirmativeStartMessage(String message) {
@@ -213,28 +228,6 @@ public class IntentRouter {
                 || message.matches("^(好|好的|行|可以|ok|okay|没问题)[!！。,. ]*$");
     }
 
-    private boolean hasSlotFillingSignals(String message) {
-        boolean hasBudgetSignal = message.contains("预算")
-                || message.contains("人民币")
-                || message.contains("rmb")
-                || message.contains("cny")
-                || message.matches(".*\\d+[kKwW万]?\\s*(元|块|人民币|rmb|cny|￥).*");
-        boolean hasDurationSignal = message.contains("天")
-                || message.contains("晚")
-                || message.contains("日游")
-                || message.matches(".*\\d+\\s*(day|days|night|nights).*");
-        boolean hasPreferenceSignal = message.contains("喜欢")
-                || message.contains("偏好")
-                || message.contains("想要")
-                || message.contains("美食")
-                || message.contains("亲子")
-                || message.contains("情侣")
-                || message.contains("citywalk")
-                || message.contains("museum")
-                || message.contains("food");
-        return hasBudgetSignal || hasDurationSignal || hasPreferenceSignal;
-    }
-
     private boolean containsAdjustmentSignal(String message) {
         return message.contains("改")
                 || message.contains("调整")
@@ -246,14 +239,6 @@ public class IntentRouter {
                 || message.contains("adjust")
                 || message.contains("instead")
                 || message.contains("not now");
-    }
-
-    private String getPreviousRouteReason(AgentState state) {
-        if (state == null || state.getMetadata() == null) {
-            return null;
-        }
-        Object routeReason = state.getMetadata().get("routeReason");
-        return routeReason == null ? null : String.valueOf(routeReason);
     }
 
     public record Decision(String toolName, String reason, AgentState.AgentPhase nextPhase) {

@@ -22,6 +22,16 @@ public interface ItineraryGenerationService {
      * 获取当前步骤描述
      */
     String getCurrentStep(Long tripId);
+
+    /**
+     * 获取生成状态（Redis 中的临时状态）
+     */
+    String getGenerationStatus(Long tripId);
+
+    /**
+     * 获取生成失败错误信息
+     */
+    String getGenerationErrorMessage(Long tripId);
     
     /**
      * 更新生成进度

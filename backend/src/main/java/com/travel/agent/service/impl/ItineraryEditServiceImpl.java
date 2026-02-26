@@ -2,9 +2,11 @@ package com.travel.agent.service.impl;
 
 import com.travel.agent.entity.ItineraryItems;
 import com.travel.agent.entity.ItineraryDays;
+import com.travel.agent.entity.ItineraryVersions;
 import com.travel.agent.entity.Trips;
 import com.travel.agent.entity.ConversationHistory;
 import com.travel.agent.entity.UserPreferences;
+import com.travel.agent.mapper.ItineraryVersionsMapper;
 import com.travel.agent.service.*;
 import com.travel.agent.dto.response.CommonResponse;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -18,9 +20,15 @@ import org.springframework.transaction.annotation.Transactional;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -35,6 +43,8 @@ public class ItineraryEditServiceImpl implements ItineraryEditService {
     private final ConversationHistoryService conversationHistoryService;
     private final UserPreferencesService userPreferencesService;
     private final AIService aiService;
+    private final ItineraryVersionsService itineraryVersionsService;
+    private final ItineraryVersionsMapper itineraryVersionsMapper;
     private final Gson gson = new Gson();
     
     @Override
@@ -363,17 +373,149 @@ public class ItineraryEditServiceImpl implements ItineraryEditService {
     
     @Override
     @Transactional
+    @Caching(evict = {
+        @CacheEvict(value = "trip", key = "#tripId"),
+        @CacheEvict(value = "latestTrip", allEntries = true)
+    })
     public CommonResponse<String> saveEdit(Long tripId, String editSummary) {
         try {
             log.info("保存编辑: tripId={}, summary={}", tripId, editSummary);
-            
-            // TODO: 实现保存逻辑
-            
-            return CommonResponse.success("编辑已保存");
+
+            Trips trip = tripsService.getById(tripId);
+            if (trip == null) {
+                return CommonResponse.error(404, "Trip not found");
+            }
+
+            List<ItineraryDays> days = itineraryDaysService.lambdaQuery()
+                    .eq(ItineraryDays::getTripId, tripId)
+                    .orderByAsc(ItineraryDays::getDayNumber)
+                    .list();
+
+            List<ItineraryItems> items = itineraryItemsService.lambdaQuery()
+                    .eq(ItineraryItems::getTripId, tripId)
+                    .orderByAsc(ItineraryItems::getDayId)
+                    .orderByAsc(ItineraryItems::getOrderIndex)
+                    .list();
+
+            BigDecimal totalCost = items.stream()
+                    .map(ItineraryItems::getCost)
+                    .filter(cost -> cost != null)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            int nextVersion = resolveNextVersion(tripId, trip.getCurrentVersion());
+            LocalDateTime now = LocalDateTime.now();
+            String snapshotJson = buildSnapshotJson(trip, days, items, now);
+            String changeDescription = (editSummary == null || editSummary.isBlank())
+                    ? "Manual itinerary edit"
+                    : editSummary.trim();
+
+            ItineraryVersions version = new ItineraryVersions();
+            version.setTripId(tripId);
+            version.setVersionNumber(nextVersion);
+            version.setSnapshot(snapshotJson);
+            version.setChangeDescription(changeDescription);
+            version.setTotalCost(totalCost);
+            version.setCreatedAt(now);
+
+            int inserted = itineraryVersionsMapper.insertJsonb(version);
+            if (inserted <= 0) {
+                throw new IllegalStateException("Failed to persist itinerary version");
+            }
+
+            trip.setCurrentVersion(nextVersion);
+            trip.setUpdatedAt(now);
+            tripsService.updateById(trip);
+
+            log.info("编辑已保存并生成版本: tripId={}, version={}", tripId, nextVersion);
+            return CommonResponse.success("编辑已保存（版本 V" + nextVersion + "）");
         } catch (Exception e) {
             log.error("保存编辑失败", e);
-            return CommonResponse.error(500, "保存失败");
+            return CommonResponse.error(500, "保存失败: " + e.getMessage());
         }
+    }
+
+    private int resolveNextVersion(Long tripId, Integer tripCurrentVersion) {
+        int latest = tripCurrentVersion != null ? tripCurrentVersion : 0;
+        ItineraryVersions latestVersionRecord = itineraryVersionsService.lambdaQuery()
+                .eq(ItineraryVersions::getTripId, tripId)
+                .orderByDesc(ItineraryVersions::getVersionNumber)
+                .last("LIMIT 1")
+                .one();
+        if (latestVersionRecord != null && latestVersionRecord.getVersionNumber() != null) {
+            latest = Math.max(latest, latestVersionRecord.getVersionNumber());
+        }
+        return Math.max(1, latest + 1);
+    }
+
+    private String buildSnapshotJson(Trips trip, List<ItineraryDays> days, List<ItineraryItems> items, LocalDateTime savedAt) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("tripId", trip.getId());
+        snapshot.put("savedAt", savedAt.toString());
+        snapshot.put("trip", buildTripSnapshot(trip));
+
+        Map<Long, List<ItineraryItems>> itemsByDay = new LinkedHashMap<>();
+        for (ItineraryItems item : items) {
+            itemsByDay.computeIfAbsent(item.getDayId(), key -> new ArrayList<>()).add(item);
+        }
+        for (List<ItineraryItems> dayItems : itemsByDay.values()) {
+            dayItems.sort(Comparator
+                    .comparing(ItineraryItems::getOrderIndex, Comparator.nullsLast(Integer::compareTo))
+                    .thenComparing(ItineraryItems::getStartTime, Comparator.nullsLast(java.time.LocalTime::compareTo))
+                    .thenComparing(ItineraryItems::getId, Comparator.nullsLast(Long::compareTo)));
+        }
+
+        List<Map<String, Object>> daySnapshots = new ArrayList<>();
+        for (ItineraryDays day : days) {
+            Map<String, Object> daySnapshot = new LinkedHashMap<>();
+            daySnapshot.put("dayId", day.getId());
+            daySnapshot.put("dayNumber", day.getDayNumber());
+            daySnapshot.put("date", day.getDate() != null ? day.getDate().toString() : null);
+            daySnapshot.put("theme", day.getTheme());
+
+            List<ItineraryItems> dayItems = itemsByDay.getOrDefault(day.getId(), Collections.emptyList());
+            List<Map<String, Object>> activitySnapshots = dayItems.stream()
+                    .map(this::buildItemSnapshot)
+                    .collect(Collectors.toList());
+            daySnapshot.put("activities", activitySnapshots);
+            daySnapshots.add(daySnapshot);
+        }
+
+        snapshot.put("days", daySnapshots);
+        return gson.toJson(snapshot);
+    }
+
+    private Map<String, Object> buildTripSnapshot(Trips trip) {
+        Map<String, Object> tripSnapshot = new LinkedHashMap<>();
+        tripSnapshot.put("destinationName", trip.getDestinationName());
+        tripSnapshot.put("destinationCountry", trip.getDestinationCountry());
+        tripSnapshot.put("startDate", trip.getStartDate() != null ? trip.getStartDate().toString() : null);
+        tripSnapshot.put("endDate", trip.getEndDate() != null ? trip.getEndDate().toString() : null);
+        tripSnapshot.put("durationDays", trip.getDurationDays());
+        tripSnapshot.put("partySize", trip.getPartySize());
+        tripSnapshot.put("totalBudget", trip.getTotalBudget());
+        tripSnapshot.put("status", trip.getStatus());
+        return tripSnapshot;
+    }
+
+    private Map<String, Object> buildItemSnapshot(ItineraryItems item) {
+        Map<String, Object> itemSnapshot = new LinkedHashMap<>();
+        itemSnapshot.put("itemId", item.getId());
+        itemSnapshot.put("dayId", item.getDayId());
+        itemSnapshot.put("orderIndex", item.getOrderIndex());
+        itemSnapshot.put("activityName", item.getActivityName());
+        itemSnapshot.put("activityType", item.getActivityType());
+        itemSnapshot.put("startTime", item.getStartTime() != null ? item.getStartTime().toString() : null);
+        itemSnapshot.put("durationMinutes", item.getDurationMinutes());
+        itemSnapshot.put("location", item.getLocation());
+        itemSnapshot.put("cost", item.getCost());
+        itemSnapshot.put("bookingUrl", item.getBookingUrl());
+        itemSnapshot.put("status", item.getStatus());
+        itemSnapshot.put("notes", item.getNotes());
+        itemSnapshot.put("latitude", item.getLatitude());
+        itemSnapshot.put("longitude", item.getLongitude());
+        itemSnapshot.put("placeId", item.getPlaceId());
+        itemSnapshot.put("originalFlag", item.getOriginalFlag());
+        return itemSnapshot;
     }
     
     private String buildOptimizePrompt(Long tripId, String optimizationType) {
@@ -696,4 +838,3 @@ public class ItineraryEditServiceImpl implements ItineraryEditService {
         return response;
     }
 }
-

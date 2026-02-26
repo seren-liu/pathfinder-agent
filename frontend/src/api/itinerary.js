@@ -1,4 +1,4 @@
-import request from '@/utils/request'
+import request from './request'
 
 /**
  * 获取可编辑的行程
@@ -79,10 +79,14 @@ export function updateActivity(tripId, itemId, data) {
  * 保存编辑
  */
 export function saveItineraryEdit(tripId, data) {
+  const editSummary =
+    typeof data === 'string'
+      ? data
+      : data?.editSummary
   return request({
     url: `/trips/${tripId}/editor/save`,
     method: 'post',
-    data
+    params: { editSummary }
   })
 }
 
@@ -120,4 +124,3 @@ export function deleteDay(tripId, dayId) {
     method: 'delete'
   })
 }
-

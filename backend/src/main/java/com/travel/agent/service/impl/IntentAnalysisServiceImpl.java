@@ -172,6 +172,11 @@ public class IntentAnalysisServiceImpl implements IntentAnalysisService {
             if (mood != null && !mood.equalsIgnoreCase("UNKNOWN")) {
                 builder.mood(mood);
             }
+
+            TravelIntent.CompanionType companionType = detectCompanionType(originalInput);
+            if (companionType != null) {
+                builder.companionType(companionType);
+            }
             
             // 设置置信度
             if (confidence != null) {
@@ -287,5 +292,48 @@ public class IntentAnalysisServiceImpl implements IntentAnalysisService {
             log.warn("Failed to extract numeric value from: {}", value);
             return null;
         }
+    }
+
+    private TravelIntent.CompanionType detectCompanionType(String message) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        String lower = message.toLowerCase();
+        if (lower.contains("家庭")
+                || lower.contains("一家")
+                || lower.contains("家人")
+                || lower.contains("亲子")
+                || lower.contains("带娃")
+                || lower.contains("父母")
+                || lower.contains("孩子")) {
+            return TravelIntent.CompanionType.FAMILY;
+        }
+        if (lower.contains("情侣")
+                || lower.contains("爱人")
+                || lower.contains("伴侣")
+                || lower.contains("对象")
+                || lower.contains("男朋友")
+                || lower.contains("女朋友")
+                || lower.contains("夫妻")
+                || lower.contains("honeymoon")
+                || lower.contains("romantic")) {
+            return TravelIntent.CompanionType.COUPLE;
+        }
+        if (lower.contains("独自")
+                || lower.contains("独行")
+                || lower.contains("一个人")
+                || lower.contains("solo")
+                || lower.contains("alone")) {
+            return TravelIntent.CompanionType.SOLO;
+        }
+        if (lower.contains("朋友")
+                || lower.contains("闺蜜")
+                || lower.contains("哥们")
+                || lower.contains("同事")
+                || lower.contains("buddy")
+                || lower.contains("friends")) {
+            return TravelIntent.CompanionType.FRIENDS;
+        }
+        return null;
     }
 }

@@ -59,9 +59,7 @@ public class SaveNode implements AsyncNodeAction<TravelPlanningState> {
                 
             } catch (Exception e) {
                 log.error("❌ Save failed", e);
-                Map<String, Object> result = new HashMap<>();
-                result.put("errorMessage", "Save failed: " + e.getMessage());
-                return result;
+                throw new RuntimeException("Save failed: " + e.getMessage(), e);
             }
         });
     }

@@ -347,12 +347,9 @@ const confirmSelection = async () => {
 
     loading.value = true
     
-    // ✅ 方案 B: 直接传递目的地信息，不需要先保存到数据库
-    // 根据 budgetLevel 计算 totalBudget
-    const budgetLevel = parsedIntent.value?.budgetLevel || 2
-    const durationDays = parsedIntent.value?.estimatedDuration || 5
-    const dailyCost = { 1: 150, 2: 300, 3: 500 }[budgetLevel] || 300
-    const totalBudget = dailyCost * durationDays
+    // ✅ 优先使用用户输入的原始预算与天数，避免默认值覆盖
+    const durationDays = resolveDurationDays()
+    const totalBudget = resolveTotalBudget(durationDays)
     
     const tripId = await generateItinerary({
       userId: userStore.userId,
@@ -370,7 +367,7 @@ const confirmSelection = async () => {
       durationDays: durationDays,
       totalBudget: totalBudget,
       partySize: 1,
-      preferences: parsedIntent.value?.interests?.join(', ') || ''
+      preferences: resolvePreferences()
     })
     
     // 跳转到生成进度页面
@@ -403,6 +400,65 @@ const getProgressColor = (score) => {
   if (score >= 80) return '#67c23a'
   if (score >= 60) return '#e6a23c'
   return '#f56c6c'
+}
+
+const resolveDurationDays = () => {
+  const candidates = [
+    parsedIntent.value?.days,
+    parsedIntent.value?.estimatedDuration,
+    route.query.days,
+    selectedDestination.value?.recommendedDays
+  ]
+
+  for (const candidate of candidates) {
+    const normalized = parseInt(candidate, 10)
+    if (!Number.isNaN(normalized) && normalized > 0) {
+      return normalized
+    }
+  }
+  return 5
+}
+
+const resolveTotalBudget = (durationDays) => {
+  const explicitBudget = parseBudgetValue(
+    parsedIntent.value?.budget ?? parsedIntent.value?.totalBudget ?? route.query.budget
+  )
+  if (explicitBudget !== null) {
+    return explicitBudget
+  }
+
+  const budgetLevel = Number(parsedIntent.value?.budgetLevel || selectedDestination.value?.budgetLevel || 2)
+  const dailyCost = { 1: 150, 2: 300, 3: 500 }[budgetLevel] || 300
+  return dailyCost * durationDays
+}
+
+const parseBudgetValue = (rawBudget) => {
+  if (rawBudget === null || rawBudget === undefined) return null
+  if (typeof rawBudget === 'number' && Number.isFinite(rawBudget) && rawBudget > 0) {
+    return Math.round(rawBudget)
+  }
+
+  const text = String(rawBudget).trim().toLowerCase()
+  if (!text) return null
+
+  const numberMatches = Array.from(text.matchAll(/(\d+(?:\.\d+)?)/g))
+  if (!numberMatches.length) return null
+
+  let value = Math.max(...numberMatches.map(match => Number.parseFloat(match[1])))
+  if (!Number.isFinite(value) || value <= 0) return null
+
+  if (text.includes('万')) {
+    value *= 10000
+  } else if (text.includes('k')) {
+    value *= 1000
+  }
+
+  return Math.round(value)
+}
+
+const resolvePreferences = () => {
+  const interests = parsedIntent.value?.interests || parsedIntent.value?.keywords || []
+  return Array.isArray(interests) ? interests.join(', ') : ''
 }
 </script>
 
