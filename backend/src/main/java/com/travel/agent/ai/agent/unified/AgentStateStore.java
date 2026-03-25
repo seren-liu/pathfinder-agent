@@ -1,6 +1,8 @@
 package com.travel.agent.ai.agent.unified;
 
 import com.travel.agent.config.AgentConfig;
+import com.travel.agent.dto.unified.StateConverter;
+import com.travel.agent.dto.unified.UnifiedTravelIntent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -23,22 +25,24 @@ public class AgentStateStore {
     private final RedisTemplate<String, Object> redisTemplate;
     private final AgentConfig agentConfig;
 
-    public AgentState loadOrCreate(Long userId, String sessionId, String currentMessage) {
+    public UnifiedAgentState loadOrCreate(Long userId, String sessionId, String currentMessage) {
         String key = getKey(sessionId);
         Object cached = redisTemplate.opsForValue().get(key);
 
-        AgentState state;
-        if (cached instanceof AgentState cachedState) {
+        UnifiedAgentState state;
+        if (cached instanceof UnifiedAgentState cachedState) {
             state = cachedState;
+        } else if (cached instanceof AgentState legacyState) {
+            state = fromLegacyState(legacyState);
         } else {
-            state = AgentState.create(userId, sessionId, currentMessage);
+            state = UnifiedAgentState.create(userId, sessionId, currentMessage);
         }
 
         // 每次请求刷新会话上下文
         state.setUserId(userId);
         state.setSessionId(sessionId);
         state.setCurrentMessage(currentMessage);
-        state.setUpdatedAt(LocalDateTime.now());
+        state.setLastUpdatedAt(LocalDateTime.now());
 
         // 兼容历史数据结构
         if (state.getMetadata() == null) {
@@ -47,22 +51,43 @@ public class AgentStateStore {
         if (state.getConversationHistory() == null) {
             state.setConversationHistory(new ArrayList<>());
         }
-        if (state.getPhase() == null) {
-            state.setPhase(AgentState.AgentPhase.INITIAL);
+        if (state.getCurrentPhase() == null) {
+            state.setCurrentPhase(UnifiedAgentState.ExecutionPhase.INITIAL);
         }
-        if (state.getConversationTurns() == null) {
-            state.setConversationTurns(0);
+        if (state.getIterationCount() == null) {
+            state.setIterationCount(0);
+        }
+        if (state.getMaxIterations() == null) {
+            state.setMaxIterations(10);
+        }
+        if (state.getShouldTerminate() == null) {
+            state.setShouldTerminate(false);
+        }
+        if (state.getItineraryStatus() == null) {
+            state.setItineraryStatus(UnifiedAgentState.ItineraryStatus.NOT_STARTED);
+        }
+        if (state.getIntent() == null) {
+            state.setIntent(UnifiedTravelIntent.createDefault(userId, sessionId));
+        }
+        if (state.getRecommendations() == null) {
+            state.setRecommendations(new ArrayList<>());
+        }
+        if (state.getExcludedDestinations() == null) {
+            state.setExcludedDestinations(new ArrayList<>());
+        }
+        if (state.getErrors() == null) {
+            state.setErrors(new ArrayList<>());
         }
 
         return state;
     }
 
-    public void save(AgentState state) {
+    public void save(UnifiedAgentState state) {
         if (state == null || state.getSessionId() == null) {
             return;
         }
 
-        state.setUpdatedAt(LocalDateTime.now());
+        state.setLastUpdatedAt(LocalDateTime.now());
         redisTemplate.opsForValue().set(
                 getKey(state.getSessionId()),
                 state,
@@ -79,5 +104,44 @@ public class AgentStateStore {
 
     private String getKey(String sessionId) {
         return STATE_KEY_PREFIX + sessionId;
+    }
+
+    private UnifiedAgentState fromLegacyState(AgentState legacyState) {
+        UnifiedAgentState migrated = UnifiedAgentState.create(
+                legacyState.getUserId(),
+                legacyState.getSessionId(),
+                legacyState.getCurrentMessage()
+        );
+        migrated.setIntent(StateConverter.fromTravelIntent(
+                legacyState.getIntent(),
+                legacyState.getUserId(),
+                legacyState.getSessionId()
+        ));
+        migrated.setRecommendations(legacyState.getRecommendations() != null
+                ? new ArrayList<>(legacyState.getRecommendations())
+                : new ArrayList<>());
+        migrated.setSelectedDestination(legacyState.getSelectedDestination());
+        migrated.setTripId(legacyState.getTripId());
+        migrated.setMetadata(legacyState.getMetadata() != null
+                ? new HashMap<>(legacyState.getMetadata())
+                : new HashMap<>());
+        migrated.setLastUpdatedAt(legacyState.getUpdatedAt() != null
+                ? legacyState.getUpdatedAt()
+                : LocalDateTime.now());
+        if (legacyState.getConversationHistory() != null) {
+            for (String line : legacyState.getConversationHistory()) {
+                if (line == null || line.isBlank()) {
+                    continue;
+                }
+                String role = line.startsWith("assistant:") ? "assistant" : "user";
+                String content = line.replaceFirst("^(user|assistant):\\s*", "");
+                migrated.addConversationMessage(role, content);
+            }
+        }
+        if (legacyState.getTripId() != null) {
+            migrated.setItineraryStatus(UnifiedAgentState.ItineraryStatus.GENERATING);
+            migrated.setCurrentPhase(UnifiedAgentState.ExecutionPhase.GENERATING_ITINERARY);
+        }
+        return migrated;
     }
 }

@@ -95,12 +95,13 @@ public class ConversationServiceImpl implements ConversationService {
         prompt.append("Reply in the same language as the user (default Simplified Chinese). ");
         prompt.append("Sound natural, warm, and proactive.\n");
         prompt.append("Conversation style rules:\n");
-        prompt.append("1) Start with a short acknowledgement of what user just said.\n");
-        prompt.append("2) Avoid form-like or robotic wording.\n");
-        prompt.append("3) Ask at most ONE most important follow-up question per turn.\n");
-        prompt.append("4) If destination + days + budget are already clear, offer to start itinerary directly and give one optional refinement.\n");
-        prompt.append("5) Keep responses concise (2-4 short sentences).\n");
-        prompt.append("6) Never ask user to repeat information already provided in history.\n\n");
+        prompt.append("1) Acknowledge what the user said briefly (1 sentence max).\n");
+        prompt.append("2) Collect ALL still-missing essential fields (days, budget) in ONE message — never split them across multiple turns.\n");
+        prompt.append("   Example: if days and budget are both missing, ask for both together: '请问计划几天，预算大概多少？'\n");
+        prompt.append("3) Do NOT ask the user to choose between specific destinations or routes (e.g. 'A vs B city?') — the recommendation system handles that. Only collect: days, budget, travel style/interests.\n");
+        prompt.append("4) If destination + days + budget are all known, immediately offer to start planning: '信息已齐全，要我现在开始规划吗？'\n");
+        prompt.append("5) Keep responses concise (2–3 sentences total). Never pad with filler.\n");
+        prompt.append("6) Never ask for information already provided in conversation history.\n\n");
         
         // 意图信息（首次对话）
         if (intent != null) {
@@ -116,7 +117,7 @@ public class ConversationServiceImpl implements ConversationService {
                 if (!intent.getInterests().isEmpty()) {
                     prompt.append("Interests: ").append(String.join(", ", intent.getInterests())).append("\n");
                 }
-                prompt.append("Suggestion: Ask clarifying questions to understand their preferences better.\n");
+                prompt.append("Suggestion: Collect only the missing key fields (days, budget) needed to generate recommendations. Do NOT ask the user to choose between specific destinations.\n");
             }
             prompt.append("\n");
         }

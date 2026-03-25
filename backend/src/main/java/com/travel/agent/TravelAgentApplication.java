@@ -19,13 +19,13 @@ public class TravelAgentApplication {
         System.out.println("\n========================================");
         System.out.println("⛴ Pathfinder Agent System Started!");
         System.out.println("========================================");
-        System.out.println("📍 Server: http://localhost:8080");
-        System.out.println("📍 API Base: http://localhost:8080/api");
+        System.out.println("📍 Server: http://localhost:8081");
+        System.out.println("📍 API Base: http://localhost:8081/api");
         System.out.println("----------------------------------------");
         System.out.println("🧠 AI Architecture:");
         System.out.println("   • ReAct Agent: UnifiedReActAgent");
         System.out.println("   • LangGraph: Recommendation + Planning");
-        System.out.println("   • LLM: OpenAI GPT-4o-mini + Gemini");
+        System.out.println("   • LLM: OpenAI GPT-5-mini + Gemini");
         System.out.println("----------------------------------------");
         System.out.println("💾 Data Layer:");
         System.out.println("   • Database: PostgreSQL (travel_agent)");

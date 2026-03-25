@@ -17,6 +17,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
@@ -95,7 +96,7 @@ public class SaveNode implements AsyncNodeAction<TravelPlanningState> {
                     item.setTripId(state.getTripId());
                     item.setDayId(day.getId());
                     item.setActivityName((String) activity.get("name"));
-                    item.setActivityType((String) activity.get("type"));
+                    item.setActivityType(normalizeActivityType((String) activity.get("type")));
                     item.setLocation((String) activity.get("location"));
                     
                     // 处理时间
@@ -150,5 +151,25 @@ public class SaveNode implements AsyncNodeAction<TravelPlanningState> {
                 }
             }
         }
+    }
+
+    /**
+     * Normalize activity type to fit DB constraint:
+     * transportation/accommodation/dining/activity/other
+     */
+    private String normalizeActivityType(String rawType) {
+        if (rawType == null || rawType.isBlank()) {
+            return "activity";
+        }
+
+        String type = rawType.trim().toLowerCase(Locale.ROOT);
+        return switch (type) {
+            case "transportation", "accommodation", "dining", "activity", "other" -> type;
+            case "hotel", "lodging", "stay", "checkin", "check-in" -> "accommodation";
+            case "restaurant", "food", "cafe", "breakfast", "lunch", "dinner" -> "dining";
+            case "transit", "transfer", "flight", "train", "bus", "taxi", "metro", "subway", "drive" -> "transportation";
+            case "sightseeing", "landmark", "museum", "attraction", "culture", "shopping", "entertainment", "experience", "outdoor", "nature" -> "activity";
+            default -> "activity";
+        };
     }
 }

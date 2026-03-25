@@ -4,7 +4,7 @@ import { useUserStore } from '@/stores/user'
 
 // 创建 axios 实例
 // baseURL 配置说明：
-// - 开发环境：使用 '/api'，由 Vite 代理到 http://localhost:8080
+// - 开发环境：使用 '/api'，由 Vite 代理到 http://localhost:8081
 // - 生产环境：使用 '/api'，由 Nginx 代理到后端服务器
 // - 如果设置了 VITE_API_BASE_URL 环境变量，则使用该值
 const request = axios.create({

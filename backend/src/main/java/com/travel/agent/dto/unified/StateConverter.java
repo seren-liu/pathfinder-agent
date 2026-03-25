@@ -176,27 +176,72 @@ public class StateConverter {
         if (destination == null || destination.isEmpty()) {
             return UnifiedTravelIntent.DestinationType.UNKNOWN;
         }
-        
+
         String lower = destination.toLowerCase();
-        
-        // 大洲/区域
-        if (lower.contains("europe") || lower.contains("欧洲") || 
-            lower.contains("asia") || lower.contains("亚洲") ||
-            lower.contains("africa") || lower.contains("非洲") ||
-            lower.contains("america") || lower.contains("美洲") ||
-            lower.contains("oceania") || lower.contains("大洋洲")) {
+
+        // Continents
+        if (lower.equals("非洲") || lower.equals("亚洲") || lower.equals("欧洲")
+                || lower.equals("美洲") || lower.equals("北美洲") || lower.equals("南美洲")
+                || lower.equals("大洋洲") || lower.equals("南极洲")
+                || lower.equals("africa") || lower.equals("asia") || lower.equals("europe")
+                || lower.equals("oceania") || lower.equals("antarctica")) {
             return UnifiedTravelIntent.DestinationType.REGION;
         }
-        
-        // 模糊描述
-        if (lower.contains("beach") || lower.contains("海滩") ||
-            lower.contains("mountain") || lower.contains("山") ||
-            lower.contains("island") || lower.contains("岛") ||
-            lower.contains("countryside") || lower.contains("乡村") ||
-            lower.contains("tropical") || lower.contains("热带")) {
+
+        // Sub-regions / cross-country regions
+        if (lower.contains("东南亚") || lower.contains("southeast asia") || lower.contains("south east asia")
+                || lower.contains("东亚") || lower.contains("east asia")
+                || lower.contains("南亚") || lower.contains("south asia")
+                || lower.contains("西亚") || lower.contains("west asia")
+                || lower.contains("中亚") || lower.contains("central asia")
+                || lower.contains("东北亚") || lower.contains("northeast asia")
+                || lower.contains("中东") || lower.contains("middle east")
+                || lower.contains("北非") || lower.contains("north africa")
+                || lower.contains("西非") || lower.contains("west africa")
+                || lower.contains("东非") || lower.contains("east africa")
+                || lower.contains("拉美") || lower.contains("latin america")
+                || lower.contains("北美") || lower.contains("north america")
+                || lower.contains("南美") || lower.contains("south america")
+                || lower.contains("中美") || lower.contains("central america")
+                || lower.contains("加勒比") || lower.contains("caribbean")
+                || lower.contains("北欧") || lower.contains("南欧") || lower.contains("西欧")
+                || lower.contains("东欧") || lower.contains("中欧")
+                || lower.contains("northern europe") || lower.contains("southern europe")
+                || lower.contains("western europe") || lower.contains("eastern europe")
+                || lower.contains("central europe")) {
+            return UnifiedTravelIntent.DestinationType.REGION;
+        }
+
+        // Continent-containing strings (e.g. "去非洲", "亚洲旅行")
+        if (lower.contains("欧洲") || lower.contains("亚洲") || lower.contains("非洲")
+                || lower.contains("美洲") || lower.contains("大洋洲")
+                || lower.contains("europe") || lower.contains("africa")
+                || lower.contains("oceania") || lower.contains("america")) {
+            return UnifiedTravelIntent.DestinationType.REGION;
+        }
+
+        // Directional region signals (东南, 西北, etc.)
+        if (lower.contains("东南") || lower.contains("西北") || lower.contains("东北") || lower.contains("西南")
+                || lower.contains("东部") || lower.contains("西部")
+                || lower.contains("南部") || lower.contains("北部") || lower.contains("中部")) {
+            return UnifiedTravelIntent.DestinationType.REGION;
+        }
+
+        // 模糊描述 (includes 沙滩 / 冲浪 / etc.)
+        if (lower.contains("beach") || lower.contains("海滩") || lower.contains("沙滩")
+                || lower.contains("mountain") || lower.contains("山")
+                || lower.contains("island") || lower.contains("岛")
+                || lower.contains("countryside") || lower.contains("乡村")
+                || lower.contains("tropical") || lower.contains("热带")
+                || lower.contains("冲浪") || lower.contains("surf")) {
             return UnifiedTravelIntent.DestinationType.VAGUE;
         }
-        
+
+        // Long sentence rather than a place name — treat as vague
+        if (destination.length() > 8 && (lower.contains("去") || lower.contains("想") || lower.contains("玩") || lower.contains("旅"))) {
+            return UnifiedTravelIntent.DestinationType.VAGUE;
+        }
+
         // 大国家
         String[] largeCountries = {
             "china", "中国", "usa", "美国", "america",
@@ -204,13 +249,13 @@ public class StateConverter {
             "australia", "澳大利亚", "brazil", "巴西",
             "india", "印度"
         };
-        
+
         for (String country : largeCountries) {
             if (lower.equals(country) || lower.contains(country + " ")) {
                 return UnifiedTravelIntent.DestinationType.COUNTRY;
             }
         }
-        
+
         // 默认认为是城市
         return UnifiedTravelIntent.DestinationType.CITY;
     }

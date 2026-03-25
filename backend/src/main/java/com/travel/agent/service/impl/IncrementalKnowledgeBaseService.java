@@ -46,6 +46,36 @@ public class IncrementalKnowledgeBaseService implements KnowledgeBaseService {
     
     // 知识库目录
     private static final String KNOWLEDGE_DIR = "data/knowledge";
+
+    private Path resolveKnowledgeDir() {
+        Path direct = Paths.get(KNOWLEDGE_DIR).toAbsolutePath().normalize();
+        Path parent = Paths.get("..", KNOWLEDGE_DIR).toAbsolutePath().normalize();
+
+        if (containsGuideFiles(parent)) {
+            return parent;
+        }
+        if (containsGuideFiles(direct)) {
+            return direct;
+        }
+        if (Files.exists(parent)) {
+            return parent;
+        }
+        if (Files.exists(direct)) {
+            return direct;
+        }
+        return direct;
+    }
+
+    private boolean containsGuideFiles(Path dir) {
+        if (!Files.isDirectory(dir)) {
+            return false;
+        }
+        try (java.util.stream.Stream<Path> stream = Files.list(dir)) {
+            return stream.anyMatch(p -> p.getFileName().toString().endsWith("_guide.md"));
+        } catch (Exception e) {
+            return false;
+        }
+    }
     
     /**
      * 启动时初始化文件监听
@@ -184,7 +214,7 @@ public class IncrementalKnowledgeBaseService implements KnowledgeBaseService {
      * 启动文件监听器
      */
     private void startFileWatcher() {
-        Path knowledgeDir = Paths.get(KNOWLEDGE_DIR);
+        Path knowledgeDir = resolveKnowledgeDir();
         
         // 确保目录存在
         try {

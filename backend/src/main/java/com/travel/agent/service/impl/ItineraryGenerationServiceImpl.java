@@ -291,7 +291,7 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
                 item.setDayId(day.getId());
                 item.setOrderIndex(orderIndex++);
                 item.setActivityName(activity.getName());
-                item.setActivityType(activity.getType());
+                item.setActivityType(normalizeActivityType(activity.getType()));
                 
                 try {
                     item.setStartTime(LocalTime.parse(activity.getStartTime()));
@@ -322,6 +322,26 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
         }
         
         log.info("✅ Saved {} days to database", dayPlans.size());
+    }
+
+    /**
+     * Normalize activity type to fit DB constraint:
+     * transportation/accommodation/dining/activity/other
+     */
+    private String normalizeActivityType(String rawType) {
+        if (rawType == null || rawType.isBlank()) {
+            return "activity";
+        }
+
+        String type = rawType.trim().toLowerCase(Locale.ROOT);
+        return switch (type) {
+            case "transportation", "accommodation", "dining", "activity", "other" -> type;
+            case "hotel", "lodging", "stay", "checkin", "check-in" -> "accommodation";
+            case "restaurant", "food", "cafe", "breakfast", "lunch", "dinner" -> "dining";
+            case "transit", "transfer", "flight", "train", "bus", "taxi", "metro", "subway", "drive" -> "transportation";
+            case "sightseeing", "landmark", "museum", "attraction", "culture", "shopping", "entertainment", "experience", "outdoor", "nature" -> "activity";
+            default -> "activity";
+        };
     }
     
     /**

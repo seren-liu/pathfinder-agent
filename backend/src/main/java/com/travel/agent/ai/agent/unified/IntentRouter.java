@@ -1,6 +1,6 @@
 package com.travel.agent.ai.agent.unified;
 
-import com.travel.agent.dto.TravelIntent;
+import com.travel.agent.dto.unified.UnifiedTravelIntent;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -18,72 +18,83 @@ public class IntentRouter {
     public static final String TOOL_GENERATE = "generate_itinerary";
     public static final String TOOL_FINISH = "FINISH";
 
-    public Decision route(AgentState state) {
+    public Decision route(UnifiedAgentState state) {
         if (state == null) {
-            return Decision.of(TOOL_CONVERSATION, "state_missing", AgentState.AgentPhase.COLLECTING_INFO);
+            return Decision.of(TOOL_CONVERSATION, "state_missing", UnifiedAgentState.ExecutionPhase.CONVERSING);
+        }
+
+        if (Boolean.TRUE.equals(state.getShouldTerminate())) {
+            return Decision.of(TOOL_FINISH, "terminated:" + nullSafe(state.getTerminationReason()), UnifiedAgentState.ExecutionPhase.COMPLETED);
         }
 
         if (state.getTripId() != null) {
-            return Decision.of(TOOL_FINISH, "trip_already_started", AgentState.AgentPhase.COMPLETED);
+            return Decision.of(TOOL_FINISH, "trip_already_started", UnifiedAgentState.ExecutionPhase.COMPLETED);
         }
 
         String message = state.getCurrentMessage() == null ? "" : state.getCurrentMessage().trim().toLowerCase(Locale.ROOT);
-        TravelIntent intent = state.getIntent();
+        UnifiedTravelIntent intent = state.getIntent();
 
-        // 用户结束语：有上下文时直接完成
-        if (isClosingMessage(message) && state.getConversationTurns() != null && state.getConversationTurns() > 0) {
-            return Decision.of(TOOL_FINISH, "user_end_of_conversation", AgentState.AgentPhase.COMPLETED);
+        if (isClosingMessage(message) && hasConversationHistory(state)) {
+            return Decision.of(TOOL_FINISH, "user_end_of_conversation", UnifiedAgentState.ExecutionPhase.COMPLETED);
         }
 
         if (intent == null) {
-            return Decision.of(TOOL_CONVERSATION, "intent_missing", AgentState.AgentPhase.COLLECTING_INFO);
+            return Decision.of(TOOL_CONVERSATION, "intent_missing", UnifiedAgentState.ExecutionPhase.CONVERSING);
         }
 
         boolean explicitGenerateRequest = isItineraryGenerationRequest(message);
-        boolean implicitGenerateRequest = isImplicitItineraryConfirmation(state, message);
+        boolean implicitGenerateRequest = isImplicitItineraryConfirmation(message);
         boolean itineraryGenerationRequested = explicitGenerateRequest || implicitGenerateRequest;
         boolean recommendationEligible = isRecommendationEligible(intent);
+
+        // 用户明确要求开始生成时，只要核心字段齐全且目的地足够具体（城市/国家/已选择推荐），直接生成。
+        if (itineraryGenerationRequested && canForceGenerate(intent, state)) {
+            return Decision.of(
+                    TOOL_GENERATE,
+                    "explicit_generate_request_with_sufficient_inputs",
+                    UnifiedAgentState.ExecutionPhase.GENERATING_ITINERARY
+            );
+        }
 
         if (Boolean.TRUE.equals(intent.getReadyForItinerary())) {
             if (hasItineraryInputs(intent, state, itineraryGenerationRequested)) {
                 String routeReason = explicitGenerateRequest
                         ? "intent_ready_for_itinerary"
                         : (state.getSelectedDestination() != null
-                                ? "selected_destination_ready_for_itinerary"
-                                : "implicit_itinerary_confirmation");
-                return Decision.of(TOOL_GENERATE, routeReason, AgentState.AgentPhase.READY_FOR_ITINERARY);
+                        ? "selected_destination_ready_for_itinerary"
+                        : "implicit_itinerary_confirmation");
+                return Decision.of(TOOL_GENERATE, routeReason, UnifiedAgentState.ExecutionPhase.GENERATING_ITINERARY);
             }
 
-            // 信息已齐但用户尚未明确要求直接生成时：
-            // - 目的地不明确（国家/大洲/模糊）=> 先推荐
-            // - 目的地明确（城市/具体地点）=> 先确认是否直接生成行程
             if (!itineraryGenerationRequested) {
                 if (!recommendationEligible) {
                     return Decision.of(
                             TOOL_CONVERSATION,
                             "awaiting_itinerary_confirmation",
-                            AgentState.AgentPhase.COLLECTING_INFO
+                            UnifiedAgentState.ExecutionPhase.CONVERSING
                     );
                 }
 
-            List<String> missingForRecommend = missingRecommendationFields(state, intent);
+                List<String> missingForRecommend = missingRecommendationFields(state, intent);
                 if (missingForRecommend.isEmpty()) {
                     return Decision.of(
                             TOOL_RECOMMEND,
                             "itinerary_not_confirmed_recommendation_first",
-                            AgentState.AgentPhase.READY_FOR_RECOMMENDATION
+                            UnifiedAgentState.ExecutionPhase.RECOMMENDING
                     );
                 }
                 return Decision.of(
                         TOOL_CONVERSATION,
                         "missing_recommendation_fields:" + String.join(",", missingForRecommend),
-                        AgentState.AgentPhase.COLLECTING_INFO
+                        UnifiedAgentState.ExecutionPhase.CONVERSING
                 );
             }
         }
 
-        if (isRefreshRecommendationRequest(message) && state.getRecommendations() != null && !state.getRecommendations().isEmpty()) {
-            return Decision.of(TOOL_RECOMMEND, "refresh_recommendation_requested", AgentState.AgentPhase.READY_FOR_RECOMMENDATION);
+        if (isRefreshRecommendationRequest(message)
+                && state.getRecommendations() != null
+                && !state.getRecommendations().isEmpty()) {
+            return Decision.of(TOOL_RECOMMEND, "refresh_recommendation_requested", UnifiedAgentState.ExecutionPhase.RECOMMENDING);
         }
 
         if (Boolean.TRUE.equals(intent.getNeedsRecommendation())) {
@@ -91,33 +102,31 @@ public class IntentRouter {
                 return Decision.of(
                         TOOL_CONVERSATION,
                         "clear_destination_skip_recommendation",
-                        AgentState.AgentPhase.COLLECTING_INFO
+                        UnifiedAgentState.ExecutionPhase.CONVERSING
                 );
             }
             List<String> missing = missingRecommendationFields(state, intent);
             if (missing.isEmpty()) {
-                return Decision.of(TOOL_RECOMMEND, "intent_needs_recommendation", AgentState.AgentPhase.READY_FOR_RECOMMENDATION);
+                return Decision.of(TOOL_RECOMMEND, "intent_needs_recommendation", UnifiedAgentState.ExecutionPhase.RECOMMENDING);
             }
             return Decision.of(
                     TOOL_CONVERSATION,
                     "missing_recommendation_fields:" + String.join(",", missing),
-                    AgentState.AgentPhase.COLLECTING_INFO
+                    UnifiedAgentState.ExecutionPhase.CONVERSING
             );
         }
 
-        return Decision.of(TOOL_CONVERSATION, "need_more_information", AgentState.AgentPhase.COLLECTING_INFO);
+        return Decision.of(TOOL_CONVERSATION, "need_more_information", UnifiedAgentState.ExecutionPhase.CONVERSING);
     }
 
-    private List<String> missingRecommendationFields(AgentState state, TravelIntent intent) {
+    private List<String> missingRecommendationFields(UnifiedAgentState state, UnifiedTravelIntent intent) {
         List<String> missing = new ArrayList<>();
         boolean hasDestination = isNotBlank(intent.getDestination());
         boolean hasPreferenceSignals = (intent.getInterests() != null && !intent.getInterests().isEmpty())
                 || isNotBlank(intent.getMood());
         boolean hasDuration = intent.getDays() != null;
-        boolean hasBudget = isNotBlank(intent.getBudget());
+        boolean hasBudget = intent.getBudget() != null;
 
-        // 首轮优先补偏好，避免“首句直接跳推荐”。
-        // 若已完成至少一轮对话且目的地+天数+预算齐全，则允许无偏好直接推荐。
         boolean allowSkipPreferences = shouldAllowRecommendationWithoutPreferences(
                 state, hasDestination, hasDuration, hasBudget
         );
@@ -135,7 +144,7 @@ public class IntentRouter {
     }
 
     private boolean shouldAllowRecommendationWithoutPreferences(
-            AgentState state,
+            UnifiedAgentState state,
             boolean hasDestination,
             boolean hasDuration,
             boolean hasBudget
@@ -143,36 +152,64 @@ public class IntentRouter {
         if (!hasDestination || !hasDuration || !hasBudget) {
             return false;
         }
-        Integer turns = state != null ? state.getConversationTurns() : null;
-        return turns != null && turns > 0;
+        return hasConversationHistory(state);
     }
 
-    private boolean hasItineraryInputs(TravelIntent intent, AgentState state, boolean explicitGenerateRequest) {
-        boolean hasCoreFields = intent.getDays() != null && isNotBlank(intent.getBudget());
+    private boolean hasItineraryInputs(UnifiedTravelIntent intent, UnifiedAgentState state, boolean explicitGenerateRequest) {
+        boolean hasCoreFields = intent.getDays() != null && intent.getBudget() != null;
         boolean hasSelectedDestination = state.getSelectedDestination() != null;
         boolean hasExplicitDestinationForGenerate = isNotBlank(intent.getDestination()) && explicitGenerateRequest;
         return hasCoreFields && (hasSelectedDestination || hasExplicitDestinationForGenerate);
     }
 
+    private boolean canForceGenerate(UnifiedTravelIntent intent, UnifiedAgentState state) {
+        if (intent == null) {
+            return false;
+        }
+        boolean hasCoreFields = intent.getDays() != null && intent.getBudget() != null;
+        if (!hasCoreFields) {
+            return false;
+        }
+        if (state != null && state.getSelectedDestination() != null) {
+            return true;
+        }
+        if (!isNotBlank(intent.getDestination())) {
+            return false;
+        }
+        UnifiedTravelIntent.DestinationType destinationType = intent.getDestinationType();
+        if (destinationType == null || destinationType == UnifiedTravelIntent.DestinationType.UNKNOWN) {
+            return true;
+        }
+        return destinationType == UnifiedTravelIntent.DestinationType.CITY
+                || destinationType == UnifiedTravelIntent.DestinationType.COUNTRY;
+    }
+
     /**
-     * 仅当目的地是国家/大洲/模糊层级时才进入推荐流程。
-     * 目的地明确（城市/具体地点）时不走推荐，而是收集完信息后确认生成行程。
+     * 仅当目的地是国家/区域/模糊层级时进入推荐流程。
      */
-    private boolean isRecommendationEligible(TravelIntent intent) {
+    private boolean isRecommendationEligible(UnifiedTravelIntent intent) {
         if (intent == null) {
             return true;
         }
         if (!isNotBlank(intent.getDestination())) {
             return true;
         }
-        if (intent.getType() == null) {
+
+        UnifiedTravelIntent.DestinationType destinationType = intent.getDestinationType();
+        if (destinationType == null || destinationType == UnifiedTravelIntent.DestinationType.UNKNOWN) {
             return true;
         }
-        return intent.getType() != TravelIntent.IntentType.DESTINATION_CLEAR;
+        return destinationType != UnifiedTravelIntent.DestinationType.CITY;
     }
 
     private boolean isNotBlank(String text) {
         return text != null && !text.isBlank();
+    }
+
+    private boolean hasConversationHistory(UnifiedAgentState state) {
+        return state != null
+                && state.getConversationHistory() != null
+                && !state.getConversationHistory().isEmpty();
     }
 
     private boolean isClosingMessage(String message) {
@@ -197,19 +234,24 @@ public class IntentRouter {
                 || message.contains("安排行程")
                 || message.contains("开始生成")
                 || message.contains("开始规划")
+                || message.contains("开始吧")
+                || message.contains("开始")
+                || message.contains("可以开始")
+                || message.contains("确认开始")
+                || message.contains("就这样")
                 || message.contains("直接生成")
                 || message.contains("generate itinerary")
                 || message.contains("build itinerary")
                 || message.contains("plan itinerary")
-                || message.contains("start itinerary");
+                || message.contains("start itinerary")
+                || message.contains("start now")
+                || message.contains("go ahead");
     }
 
-    private boolean isImplicitItineraryConfirmation(AgentState state, String message) {
+    private boolean isImplicitItineraryConfirmation(String message) {
         if (!isNotBlank(message) || containsAdjustmentSignal(message)) {
             return false;
         }
-
-        // 仅把明确的“开始/确认”话术视为隐式确认，避免用户补充预算/天数时被误触发行程生成。
         return isAffirmativeStartMessage(message);
     }
 
@@ -241,8 +283,12 @@ public class IntentRouter {
                 || message.contains("not now");
     }
 
-    public record Decision(String toolName, String reason, AgentState.AgentPhase nextPhase) {
-        public static Decision of(String toolName, String reason, AgentState.AgentPhase nextPhase) {
+    private String nullSafe(String value) {
+        return value == null ? "unknown" : value;
+    }
+
+    public record Decision(String toolName, String reason, UnifiedAgentState.ExecutionPhase nextPhase) {
+        public static Decision of(String toolName, String reason, UnifiedAgentState.ExecutionPhase nextPhase) {
             return new Decision(toolName, reason, nextPhase);
         }
     }

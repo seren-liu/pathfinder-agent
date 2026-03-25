@@ -4,6 +4,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.travel.agent.dto.TravelIntent;
+import com.travel.agent.dto.unified.StateConverter;
+import com.travel.agent.dto.unified.UnifiedTravelIntent;
 import com.travel.agent.service.AIService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -12,6 +14,7 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -74,14 +77,38 @@ public class StructuredIntentExtractor {
     private static final Pattern EXPLICIT_DAYS_VERB_RI_PATTERN = Pattern.compile(
             "(玩|待|住|安排|规划|行程|旅行)\\s*(\\d{1,2})\\s*日"
     );
+    private static final Pattern EXPLICIT_WEEKS_PATTERN = Pattern.compile(
+            "(\\d{1,2})\\s*(周|星期|week|weeks)",
+            Pattern.CASE_INSENSITIVE
+    );
+    private static final Pattern EXPLICIT_ONE_WEEK_PATTERN = Pattern.compile("(一周|一星期|1周|1星期|one week)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern BUDGET_AMOUNT_PATTERN = Pattern.compile("(\\d{2,9}(?:\\.\\d{1,2})?)\\s*(人民币|rmb|元|块|万|w|k|usd|dollars|刀)?", Pattern.CASE_INSENSITIVE);
     private static final Set<String> COUNTRY_TOKENS = buildCountryTokens();
     private static final Set<String> REGION_TOKENS = buildRegionTokens();
 
     private final AIService aiService;
     private final ObjectMapper objectMapper;
 
-    public TravelIntent extractAndMerge(String userMessage, TravelIntent previousIntent) {
-        String prompt = buildExtractionPrompt(userMessage, previousIntent);
+    public UnifiedTravelIntent extractAndMerge(String userMessage, UnifiedTravelIntent previousIntent) {
+        long start = System.currentTimeMillis();
+        TravelIntent previousLegacyIntent = StateConverter.toTravelIntent(previousIntent);
+
+        TravelIntent ruleMergedIntent = tryRuleBasedMerge(previousLegacyIntent, userMessage);
+        if (ruleMergedIntent != null) {
+            log.info("⚡ Intent extracted via rules: duration={}ms, message='{}'",
+                    System.currentTimeMillis() - start,
+                    abbreviate(userMessage, 40));
+            return mergeToUnified(previousIntent, ruleMergedIntent);
+        }
+
+        // Rule-based found no new travel info. If a previous intent exists, preserve it —
+        // no LLM call needed. The IntentRouter will decide the next action from the current state.
+        if (previousIntent != null) {
+            log.info("⚡ No new travel info, preserving existing intent ({}ms)", System.currentTimeMillis() - start);
+            return previousIntent;
+        }
+
+        String prompt = buildExtractionPrompt(userMessage, previousLegacyIntent);
         try {
             String argumentsJson = aiService.chatWithFunctionCall(
                     prompt,
@@ -91,11 +118,338 @@ public class StructuredIntentExtractor {
             );
 
             ExtractedIntent payload = objectMapper.readValue(argumentsJson, ExtractedIntent.class);
-            return mergeAndNormalize(previousIntent, payload, userMessage);
+            TravelIntent mergedLegacyIntent = mergeAndNormalize(previousLegacyIntent, payload, userMessage);
+            log.info("🧠 Intent extracted via LLM function call: duration={}ms, message='{}'",
+                    System.currentTimeMillis() - start,
+                    abbreviate(userMessage, 40));
+            return mergeToUnified(previousIntent, mergedLegacyIntent);
         } catch (Exception e) {
             log.warn("Structured intent extraction failed, fallback to previous/default intent: {}", e.getMessage());
-            return previousIntent != null ? previousIntent : defaultGeneralChatIntent();
+            if (previousIntent != null) {
+                return previousIntent;
+            }
+            return UnifiedTravelIntent.createDefault(null, null);
         }
+    }
+
+    private TravelIntent tryRuleBasedMerge(TravelIntent previousIntent, String userMessage) {
+        if (userMessage == null || userMessage.isBlank()) {
+            return null;
+        }
+        String normalizedMessage = userMessage.trim();
+        String lower = normalizedMessage.toLowerCase(Locale.ROOT);
+
+        TravelIntent base = previousIntent != null ? previousIntent : defaultGeneralChatIntent();
+        TravelIntent.TravelIntentBuilder builder = TravelIntent.builder()
+                .destination(base.getDestination())
+                .days(base.getDays())
+                .budget(base.getBudget())
+                .interests(base.getInterests() != null ? new ArrayList<>(base.getInterests()) : new ArrayList<>())
+                .mood(base.getMood())
+                .companionType(base.getCompanionType())
+                .confidence(base.getConfidence())
+                .type(base.getType())
+                .needsRecommendation(base.getNeedsRecommendation())
+                .readyForItinerary(base.getReadyForItinerary());
+
+        boolean changed = false;
+
+        Integer explicitDays = extractExplicitDaysFromMessage(normalizedMessage);
+        if (explicitDays == null) {
+            explicitDays = extractWeeksToDays(normalizedMessage);
+        }
+        if (explicitDays != null) {
+            builder.days(explicitDays);
+            changed = true;
+        }
+
+        String explicitBudget = extractExplicitBudget(normalizedMessage);
+        if (explicitBudget != null) {
+            builder.budget(explicitBudget);
+            changed = true;
+        }
+
+        TravelIntent.CompanionType companionType = extractExplicitCompanionTypeFromMessage(normalizedMessage);
+        if (companionType != null) {
+            builder.companionType(companionType);
+            changed = true;
+        }
+
+        List<String> interests = extractInterestSignals(lower);
+        if (!interests.isEmpty()) {
+            builder.interests(interests);
+            changed = true;
+        }
+
+        String mood = extractMoodSignal(lower);
+        if (mood != null) {
+            builder.mood(mood);
+            changed = true;
+        }
+
+        // Try to extract a clean geo token first (avoids storing full sentence as destination)
+        String geoToken = extractKnownGeoToken(normalizedMessage, lower);
+        if (geoToken != null && !geoToken.equalsIgnoreCase(base.getDestination())) {
+            if (!isLikelyAffirmationOrControlMessage(normalizedMessage)) {
+                builder.destination(normalizeDestination(geoToken));
+                changed = true;
+            }
+        } else if (shouldTreatAsDestinationUpdate(base, normalizedMessage, explicitBudget, explicitDays, interests, mood)) {
+            builder.destination(normalizeDestination(normalizedMessage));
+            changed = true;
+        }
+
+        if (!changed) {
+            return null;
+        }
+
+        TravelIntent merged = builder.build();
+        applyDeterministicFlags(merged, true);
+        return merged;
+    }
+
+    private Integer extractWeeksToDays(String message) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        Matcher oneWeek = EXPLICIT_ONE_WEEK_PATTERN.matcher(message);
+        if (oneWeek.find()) {
+            return 7;
+        }
+        Matcher weekMatcher = EXPLICIT_WEEKS_PATTERN.matcher(message);
+        if (weekMatcher.find()) {
+            try {
+                int weeks = Integer.parseInt(weekMatcher.group(1));
+                int days = weeks * 7;
+                if (days >= 1 && days <= 30) {
+                    return days;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private String extractExplicitBudget(String message) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        Matcher matcher = BUDGET_AMOUNT_PATTERN.matcher(message);
+        if (!matcher.find()) {
+            return null;
+        }
+        String amountStr = matcher.group(1);
+        String unit = matcher.group(2) == null ? "" : matcher.group(2).toLowerCase(Locale.ROOT);
+        try {
+            BigDecimal amount = new BigDecimal(amountStr);
+            if ("万".equals(unit) || "w".equals(unit)) {
+                amount = amount.multiply(new BigDecimal("10000"));
+            } else if ("k".equals(unit)) {
+                amount = amount.multiply(new BigDecimal("1000"));
+            }
+            if (amount.compareTo(new BigDecimal("100")) < 0) {
+                return null;
+            }
+            return amount.toPlainString();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private List<String> extractInterestSignals(String lower) {
+        if (lower == null || lower.isBlank()) {
+            return List.of();
+        }
+        LinkedHashSet<String> interests = new LinkedHashSet<>();
+        if (lower.contains("徒步") || lower.contains("hike") || lower.contains("hiking")) {
+            interests.add("hiking");
+        }
+        if (lower.contains("文化") || lower.contains("museum") || lower.contains("history")) {
+            interests.add("culture");
+        }
+        if (lower.contains("美食") || lower.contains("food")) {
+            interests.add("food");
+        }
+        if (lower.contains("海滩") || lower.contains("沙滩") || lower.contains("beach")
+                || lower.contains("冲浪") || lower.contains("surf")) {
+            interests.add("beach");
+        }
+        if (lower.contains("自然") || lower.contains("nature")) {
+            interests.add("nature");
+        }
+        if (lower.contains("动物") || lower.contains("野生") || lower.contains("wildlife")
+                || lower.contains("safari") || lower.contains("丛林")) {
+            interests.add("wildlife");
+        }
+        if (lower.contains("购物") || lower.contains("shopping")) {
+            interests.add("shopping");
+        }
+        return new ArrayList<>(interests);
+    }
+
+    private String extractMoodSignal(String lower) {
+        if (lower == null || lower.isBlank()) {
+            return null;
+        }
+        if (lower.contains("放松") || lower.contains("relax")) {
+            return "relaxing";
+        }
+        if (lower.contains("冒险") || lower.contains("adventure")) {
+            return "adventure";
+        }
+        if (lower.contains("文化") || lower.contains("cultural")) {
+            return "cultural";
+        }
+        return null;
+    }
+
+    /**
+     * Tries to find a known geo token (region or country) in the message and returns just that token.
+     * Returns null if no known token is found.
+     */
+    private String extractKnownGeoToken(String message, String lower) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+        // Check REGION_TOKENS first (higher priority — more specific regions like 东南亚)
+        for (String token : REGION_TOKENS) {
+            if (token.length() >= 2 && lower.contains(token)) {
+                int idx = lower.indexOf(token);
+                return message.substring(idx, idx + token.length());
+            }
+        }
+        // Check COUNTRY_TOKENS (only ≥2 chars to avoid single-char false positives)
+        for (String token : COUNTRY_TOKENS) {
+            if (token.length() >= 2 && lower.contains(token)) {
+                int idx = lower.indexOf(token);
+                return message.substring(idx, idx + token.length());
+            }
+        }
+        return null;
+    }
+
+    private boolean shouldTreatAsDestinationUpdate(
+            TravelIntent baseIntent,
+            String message,
+            String explicitBudget,
+            Integer explicitDays,
+            List<String> interests,
+            String mood
+    ) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        if (explicitBudget != null || explicitDays != null || (interests != null && !interests.isEmpty()) || mood != null) {
+            return false;
+        }
+        if (message.length() > 20) {
+            return false;
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        if (isLikelyAffirmationOrControlMessage(message)) {
+            return false;
+        }
+        if (lower.contains("多少钱")
+                && !lower.contains("预算")
+                && !lower.contains("几天")) {
+            return false;
+        }
+
+        boolean hasGeoCue = hasExplicitGeoCue(message, lower);
+        String existingDestination = baseIntent != null ? baseIntent.getDestination() : null;
+
+        // 已有目的地时，只有出现明确地理线索才允许改目的地，避免“开始吧/可以”等短语污染 slot。
+        if (isMeaningful(existingDestination)) {
+            return hasGeoCue;
+        }
+
+        // 首次填目的地：必须要有地理线索，或输入本身是典型地名 token（如“摩洛哥”“北非”）。
+        return hasGeoCue || looksLikeStandalonePlaceToken(message);
+    }
+
+    /**
+     * Returns true if the message contains no geo cues and is short enough to be a control phrase
+     * rather than a place name. Used to guard against treating short confirmations as destinations.
+     */
+    private boolean isLikelyAffirmationOrControlMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        // Any explicit start/confirm trigger is definitely not a destination name
+        return lower.contains("开始") || lower.contains("确认") || lower.contains("继续")
+                || lower.equals("好") || lower.equals("好的") || lower.equals("行")
+                || lower.equals("可以") || lower.equals("是") || lower.equals("是的")
+                || lower.equals("ok") || lower.equals("okay") || lower.equals("yes");
+    }
+
+    private boolean hasExplicitGeoCue(String message, String lower) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        if (lower.contains("想去")
+                || lower.contains("去")
+                || lower.contains("到")
+                || lower.contains("在")
+                || lower.contains("travel to")
+                || lower.contains("visit")
+                || lower.contains("in ")
+                || lower.contains("to ")) {
+            return true;
+        }
+        String normalized = normalizeGeoToken(message);
+        if (COUNTRY_TOKENS.contains(normalized) || REGION_TOKENS.contains(normalized)) {
+            return true;
+        }
+        return lower.contains("国")
+                || lower.contains("洲")
+                || lower.contains("省")
+                || lower.contains("州")
+                || lower.contains("市")
+                || lower.contains("岛")
+                || lower.contains("海岸")
+                || lower.contains("草原")
+                || lower.contains("沙漠");
+    }
+
+    private boolean looksLikeStandalonePlaceToken(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String normalized = normalizeGeoToken(message);
+        if (normalized.isBlank()) {
+            return false;
+        }
+        if (COUNTRY_TOKENS.contains(normalized) || REGION_TOKENS.contains(normalized)) {
+            return true;
+        }
+        // 兼容简短地名（如“摩洛哥”“北非”）
+        return message.length() <= 8 && !isLikelyAffirmationOrControlMessage(message);
+    }
+
+    private String abbreviate(String message, int max) {
+        if (message == null) {
+            return "";
+        }
+        return message.length() <= max ? message : message.substring(0, max) + "...";
+    }
+
+    private UnifiedTravelIntent mergeToUnified(UnifiedTravelIntent previousIntent, TravelIntent mergedLegacyIntent) {
+        Long userId = previousIntent != null ? previousIntent.getUserId() : null;
+        String sessionId = previousIntent != null ? previousIntent.getSessionId() : null;
+        UnifiedTravelIntent converted = StateConverter.fromTravelIntent(mergedLegacyIntent, userId, sessionId);
+        if (previousIntent == null) {
+            return converted;
+        }
+        return converted.toBuilder()
+                .sessionId(previousIntent.getSessionId())
+                .userId(previousIntent.getUserId())
+                .destinationCountry(previousIntent.getDestinationCountry())
+                .destinationLatitude(previousIntent.getDestinationLatitude())
+                .destinationLongitude(previousIntent.getDestinationLongitude())
+                .partySize(previousIntent.getPartySize())
+                .travelStyle(previousIntent.getTravelStyle())
+                .build();
     }
 
     private String buildExtractionPrompt(String userMessage, TravelIntent previousIntent) {
@@ -492,12 +846,22 @@ public class StructuredIntentExtractor {
     private static Set<String> buildRegionTokens() {
         Set<String> tokens = new HashSet<>();
         String[] regionAliases = {
+                // Continents (Chinese)
+                "非洲", "亚洲", "欧洲", "美洲", "北美洲", "南美洲", "大洋洲", "南极洲",
+                // Continents (English)
+                "africa", "asia", "europe", "oceania", "antarctica",
+                "north america", "south america", "latin america",
+                // Sub-regions (Chinese)
+                "东南亚", "东亚", "南亚", "西亚", "中亚", "东北亚",
+                "中东", "拉美", "北非", "西非", "东非", "南非地区",
+                "西欧", "东欧", "北欧", "南欧", "中欧",
+                "北美", "中美", "加勒比",
+                // Sub-regions (English)
                 "southeast asia", "south east asia",
                 "east asia", "south asia", "central asia", "west asia",
-                "middle east", "latin america", "north africa",
-                "eastern europe", "western europe", "northern europe", "southern europe",
-                "东南亚", "东亚", "南亚", "西亚", "中亚", "东北亚",
-                "中东", "拉美", "北非", "西欧", "东欧", "北欧", "南欧"
+                "middle east", "north africa", "west africa", "east africa",
+                "eastern europe", "western europe", "northern europe", "southern europe", "central europe",
+                "caribbean", "central america"
         };
         for (String alias : regionAliases) {
             addCountryToken(tokens, alias);

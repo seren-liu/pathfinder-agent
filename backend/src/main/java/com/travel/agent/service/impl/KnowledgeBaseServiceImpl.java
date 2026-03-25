@@ -30,6 +30,36 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
     
     private final ChromaService chromaService;
     private final EmbeddingModel embeddingModel;
+
+    private Path resolveKnowledgeDir() {
+        Path direct = Paths.get("data/knowledge").toAbsolutePath().normalize();
+        Path parent = Paths.get("..", "data/knowledge").toAbsolutePath().normalize();
+
+        if (containsGuideFiles(parent)) {
+            return parent;
+        }
+        if (containsGuideFiles(direct)) {
+            return direct;
+        }
+        if (Files.exists(parent)) {
+            return parent;
+        }
+        if (Files.exists(direct)) {
+            return direct;
+        }
+        return direct;
+    }
+
+    private boolean containsGuideFiles(Path dir) {
+        if (!Files.isDirectory(dir)) {
+            return false;
+        }
+        try (java.util.stream.Stream<Path> stream = Files.list(dir)) {
+            return stream.anyMatch(p -> p.getFileName().toString().endsWith("_guide.md"));
+        } catch (Exception e) {
+            return false;
+        }
+    }
     
     @Override
     public void importAllKnowledgeBase() {
@@ -38,10 +68,10 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
         try {
             String[] cities = {"tokyo", "paris", "beijing", "shanghai", "kyoto"};
             int totalChunks = 0;
+            Path knowledgeDir = resolveKnowledgeDir();
             
             for (String city : cities) {
-                String filePath = "data/knowledge/" + city + "_guide.md";
-                Path path = Paths.get(filePath);
+                Path path = knowledgeDir.resolve(city + "_guide.md");
                 
                 if (Files.exists(path)) {
                     String content = Files.readString(path, StandardCharsets.UTF_8);
@@ -49,7 +79,7 @@ public class KnowledgeBaseServiceImpl implements KnowledgeBaseService {
                     totalChunks += chunks;
                     log.info("✅ Imported {} guide: {} chunks", city, chunks);
                 } else {
-                    log.warn("⚠️ File not found: {}", filePath);
+                    log.warn("⚠️ File not found: {}", path);
                 }
             }
             

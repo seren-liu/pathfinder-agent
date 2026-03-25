@@ -13,7 +13,7 @@ import org.springframework.context.annotation.Configuration;
 public class OpenAIConfig {
     
     private String apiKey;
-    private String model = "gpt-4o-mini";
+    private String model = "gpt-5-mini";
     private String baseUrl = "https://api.openai.com/v1";
     private Integer timeout = 30000;  // 降低到 30 秒
     private Integer maxTokens = 1500;  // 降低到 1500（推荐生成约 1200 tokens）

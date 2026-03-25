@@ -17,7 +17,7 @@ public class AgentTraceService {
 
     private final ObservationRegistry observationRegistry;
 
-    public String ensureTraceId(AgentState state) {
+    public String ensureTraceId(UnifiedAgentState state) {
         Map<String, Object> metadata = state.getMetadata();
         Object existing = metadata.get("traceId");
         if (existing instanceof String s && !s.isBlank()) {

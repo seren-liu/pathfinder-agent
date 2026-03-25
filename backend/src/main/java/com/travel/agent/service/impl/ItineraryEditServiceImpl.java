@@ -29,6 +29,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -86,7 +87,7 @@ public class ItineraryEditServiceImpl implements ItineraryEditService {
             newItem.setDayId(dayId);
             newItem.setTripId(tripId);
             newItem.setActivityName(activityName);
-            newItem.setActivityType(activityType != null ? activityType : "activity");
+            newItem.setActivityType(normalizeActivityType(activityType));
             
             if (startTime != null) {
                 newItem.setStartTime(java.time.LocalTime.parse(startTime));
@@ -164,7 +165,7 @@ public class ItineraryEditServiceImpl implements ItineraryEditService {
                 item.setActivityName(activityName);
             }
             if (activityType != null) {
-                item.setActivityType(activityType);
+                item.setActivityType(normalizeActivityType(activityType));
             }
             if (startTime != null) {
                 item.setStartTime(java.time.LocalTime.parse(startTime));
@@ -369,6 +370,26 @@ public class ItineraryEditServiceImpl implements ItineraryEditService {
             log.error("更新行程天数失败: tripId={}", tripId, e);
             // 不抛出异常，避免影响主流程
         }
+    }
+
+    /**
+     * Normalize activity type to fit DB constraint:
+     * transportation/accommodation/dining/activity/other
+     */
+    private String normalizeActivityType(String rawType) {
+        if (rawType == null || rawType.isBlank()) {
+            return "activity";
+        }
+
+        String type = rawType.trim().toLowerCase(Locale.ROOT);
+        return switch (type) {
+            case "transportation", "accommodation", "dining", "activity", "other" -> type;
+            case "hotel", "lodging", "stay", "checkin", "check-in" -> "accommodation";
+            case "restaurant", "food", "cafe", "breakfast", "lunch", "dinner" -> "dining";
+            case "transit", "transfer", "flight", "train", "bus", "taxi", "metro", "subway", "drive" -> "transportation";
+            case "sightseeing", "landmark", "museum", "attraction", "culture", "shopping", "entertainment", "experience", "outdoor", "nature" -> "activity";
+            default -> "activity";
+        };
     }
     
     @Override

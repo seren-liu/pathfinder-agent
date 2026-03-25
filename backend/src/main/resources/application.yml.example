@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: 8081
   tomcat:
     connection-timeout: 10s
 
@@ -63,7 +63,7 @@ logging:
 # OpenAI API 配置
 openai:
   api-key: YOUR_OPENAI_API_KEY  # 从 https://platform.openai.com/api-keys 获取
-  model: gpt-4o-mini
+  model: gpt-5-mini
   base-url: https://api.openai.com/v1
   timeout: 30000  # 增加到 90秒
   max-tokens: 5000  # 增加到 5000
@@ -103,7 +103,7 @@ langchain4j:
   open-ai:
     chat-model:
       api-key: ${OPENAI_API_KEY:YOUR_OPENAI_API_KEY}
-      model-name: gpt-4o-mini
+      model-name: gpt-5-mini
       temperature: 0.7
       max-tokens: 5000
       timeout: 30s
@@ -254,6 +254,9 @@ agent:
   # ========== 路线优化配置 ==========
   route-optimization:
     enabled: false                  # 是否启用路线优化（Demo建议关闭以提升速度）
+  rag:
+    embedding-timeout-ms: 4000      # Embedding 查询超时（毫秒）
+    embedding-max-retries: 1        # 失败后最多重试 1 次，然后降级为空结果
   
   react:
     # ========== 执行控制 ==========

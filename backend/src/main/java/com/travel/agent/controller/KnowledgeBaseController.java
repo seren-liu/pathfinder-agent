@@ -31,6 +31,36 @@ public class KnowledgeBaseController {
     private final IncrementalKnowledgeBaseService incrementalKnowledgeBaseService;
     
     private static final String KNOWLEDGE_DIR = "data/knowledge";
+
+    private Path resolveKnowledgeDir() {
+        Path direct = Paths.get(KNOWLEDGE_DIR).toAbsolutePath().normalize();
+        Path parent = Paths.get("..", KNOWLEDGE_DIR).toAbsolutePath().normalize();
+
+        if (containsGuideFiles(parent)) {
+            return parent;
+        }
+        if (containsGuideFiles(direct)) {
+            return direct;
+        }
+        if (Files.exists(parent)) {
+            return parent;
+        }
+        if (Files.exists(direct)) {
+            return direct;
+        }
+        return direct;
+    }
+
+    private boolean containsGuideFiles(Path dir) {
+        if (!Files.isDirectory(dir)) {
+            return false;
+        }
+        try (java.util.stream.Stream<Path> stream = Files.list(dir)) {
+            return stream.anyMatch(p -> p.getFileName().toString().endsWith("_guide.md"));
+        } catch (Exception e) {
+            return false;
+        }
+    }
     
     @PostMapping("/import")
     @Operation(summary = "导入知识库", description = "将所有旅游指南文档导入到向量数据库")
@@ -110,7 +140,7 @@ public class KnowledgeBaseController {
         log.info("Manually importing document: {}", documentId);
         
         try {
-            Path documentPath = Paths.get(KNOWLEDGE_DIR, documentId + "_guide.md");
+            Path documentPath = resolveKnowledgeDir().resolve(documentId + "_guide.md");
             
             if (!Files.exists(documentPath)) {
                 return CommonResponse.error(404, "Document not found: " + documentId);

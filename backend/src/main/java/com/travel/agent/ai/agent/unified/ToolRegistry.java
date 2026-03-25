@@ -1,9 +1,9 @@
 package com.travel.agent.ai.agent.unified;
 
 import com.travel.agent.ai.agent.ActionResult;
-import com.travel.agent.ai.agent.unified.tools.ConversationTool;
-import com.travel.agent.ai.agent.unified.tools.ItineraryGenerationTool;
-import com.travel.agent.ai.agent.unified.tools.RecommendationTool;
+import com.travel.agent.ai.agent.unified.tools.UnifiedConversationTool;
+import com.travel.agent.ai.agent.unified.tools.UnifiedItineraryGenerationTool;
+import com.travel.agent.ai.agent.unified.tools.UnifiedRecommendationTool;
 import com.travel.agent.config.AgentConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -22,9 +22,9 @@ import java.util.concurrent.*;
 @Component
 public class ToolRegistry {
 
-    private final ConversationTool conversationTool;
-    private final RecommendationTool recommendationTool;
-    private final ItineraryGenerationTool itineraryGenerationTool;
+    private final UnifiedConversationTool conversationTool;
+    private final UnifiedRecommendationTool recommendationTool;
+    private final UnifiedItineraryGenerationTool itineraryGenerationTool;
     private final AgentConfig agentConfig;
 
     private final Map<String, UnifiedAgentTool> tools = new HashMap<>();
@@ -34,9 +34,9 @@ public class ToolRegistry {
      * 构造函数
      */
     public ToolRegistry(
-            ConversationTool conversationTool,
-            RecommendationTool recommendationTool,
-            ItineraryGenerationTool itineraryGenerationTool,
+            UnifiedConversationTool conversationTool,
+            UnifiedRecommendationTool recommendationTool,
+            UnifiedItineraryGenerationTool itineraryGenerationTool,
             AgentConfig agentConfig) {
         this.conversationTool = conversationTool;
         this.recommendationTool = recommendationTool;
@@ -64,7 +64,7 @@ public class ToolRegistry {
     /**
      * 执行工具（带超时控制）
      */
-    public ActionResult execute(String toolName, AgentState state) {
+    public ActionResult execute(String toolName, UnifiedAgentState state) {
         UnifiedAgentTool tool = tools.get(toolName);
 
         if (tool == null) {

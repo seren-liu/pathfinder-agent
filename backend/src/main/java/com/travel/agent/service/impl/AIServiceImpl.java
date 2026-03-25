@@ -216,8 +216,8 @@ public class AIServiceImpl implements AIService {
             // 构建请求 Body
             JsonObject requestBody = new JsonObject();
             requestBody.addProperty("model", openAIConfig.getModel());
-            requestBody.addProperty("max_tokens", openAIConfig.getMaxTokens());
-            requestBody.addProperty("temperature", openAIConfig.getTemperature());
+            addTokenLimitParameter(requestBody);
+            addTemperatureParameter(requestBody, openAIConfig.getTemperature());
             
             // 添加消息
             JsonObject message = new JsonObject();
@@ -240,7 +240,8 @@ public class AIServiceImpl implements AIService {
             // 执行请求
             try (Response response = getClient().newCall(request).execute()) {
                 if (!response.isSuccessful()) {
-                    log.error("OpenAI API error: {}", response.code());
+                    String errorBody = response.body() != null ? response.body().string() : "unknown";
+                    log.error("OpenAI API error: status={}, body={}", response.code(), errorBody);
                     throw new BusinessException("AI service unavailable. Please try again later.");
                 }
 
@@ -261,6 +262,36 @@ public class AIServiceImpl implements AIService {
             log.error("Failed to call OpenAI API", e);
             throw new BusinessException("Failed to process AI request. Please try again.");
         }
+    }
+
+    /**
+     * GPT-5 系列使用 max_completion_tokens，旧模型保持 max_tokens 兼容。
+     */
+    private void addTokenLimitParameter(JsonObject requestBody) {
+        String model = openAIConfig.getModel();
+        Integer maxTokens = openAIConfig.getMaxTokens();
+        if (maxTokens == null) {
+            return;
+        }
+        if (model != null && model.toLowerCase().startsWith("gpt-5")) {
+            requestBody.addProperty("max_completion_tokens", maxTokens);
+        } else {
+            requestBody.addProperty("max_tokens", maxTokens);
+        }
+    }
+
+    /**
+     * GPT-5 系列当前仅支持默认 temperature，避免显式传参触发 400。
+     */
+    private void addTemperatureParameter(JsonObject requestBody, Double temperature) {
+        if (temperature == null) {
+            return;
+        }
+        String model = openAIConfig.getModel();
+        if (model != null && model.toLowerCase().startsWith("gpt-5")) {
+            return;
+        }
+        requestBody.addProperty("temperature", temperature);
     }
 
     /**
@@ -497,13 +528,17 @@ public class AIServiceImpl implements AIService {
             throw new BusinessException("Function parameters schema is required.");
         }
 
+        long start = System.currentTimeMillis();
         try {
-            return callOpenAIWithFunctionCall(
+            String result = callOpenAIWithFunctionCall(
                     prompt,
                     functionName,
                     functionDescription == null ? "" : functionDescription,
                     parametersJsonSchema
             );
+            log.info("⏱️ Function-call extraction finished: function={}, duration={}ms, prompt_length={}",
+                    functionName, System.currentTimeMillis() - start, prompt.length());
+            return result;
         } catch (Exception e) {
             log.error("❌ OpenAI function call failed: function={}", functionName, e);
             throw new BusinessException("Failed to execute structured AI extraction. Please try again.");
@@ -519,8 +554,8 @@ public class AIServiceImpl implements AIService {
         try {
             JsonObject requestBody = new JsonObject();
             requestBody.addProperty("model", openAIConfig.getModel());
-            requestBody.addProperty("max_tokens", openAIConfig.getMaxTokens());
-            requestBody.addProperty("temperature", 0.0);
+            addTokenLimitParameter(requestBody);
+            addTemperatureParameter(requestBody, 0.0);
             requestBody.addProperty("parallel_tool_calls", false);
 
             JsonObject message = new JsonObject();
