@@ -1,7 +1,6 @@
 package com.travel.agent.ai.agent.unified;
 
 import com.travel.agent.config.AgentConfig;
-import com.travel.agent.dto.unified.StateConverter;
 import com.travel.agent.dto.unified.UnifiedTravelIntent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,8 +31,6 @@ public class AgentStateStore {
         UnifiedAgentState state;
         if (cached instanceof UnifiedAgentState cachedState) {
             state = cachedState;
-        } else if (cached instanceof AgentState legacyState) {
-            state = fromLegacyState(legacyState);
         } else {
             state = UnifiedAgentState.create(userId, sessionId, currentMessage);
         }
@@ -104,44 +101,5 @@ public class AgentStateStore {
 
     private String getKey(String sessionId) {
         return STATE_KEY_PREFIX + sessionId;
-    }
-
-    private UnifiedAgentState fromLegacyState(AgentState legacyState) {
-        UnifiedAgentState migrated = UnifiedAgentState.create(
-                legacyState.getUserId(),
-                legacyState.getSessionId(),
-                legacyState.getCurrentMessage()
-        );
-        migrated.setIntent(StateConverter.fromTravelIntent(
-                legacyState.getIntent(),
-                legacyState.getUserId(),
-                legacyState.getSessionId()
-        ));
-        migrated.setRecommendations(legacyState.getRecommendations() != null
-                ? new ArrayList<>(legacyState.getRecommendations())
-                : new ArrayList<>());
-        migrated.setSelectedDestination(legacyState.getSelectedDestination());
-        migrated.setTripId(legacyState.getTripId());
-        migrated.setMetadata(legacyState.getMetadata() != null
-                ? new HashMap<>(legacyState.getMetadata())
-                : new HashMap<>());
-        migrated.setLastUpdatedAt(legacyState.getUpdatedAt() != null
-                ? legacyState.getUpdatedAt()
-                : LocalDateTime.now());
-        if (legacyState.getConversationHistory() != null) {
-            for (String line : legacyState.getConversationHistory()) {
-                if (line == null || line.isBlank()) {
-                    continue;
-                }
-                String role = line.startsWith("assistant:") ? "assistant" : "user";
-                String content = line.replaceFirst("^(user|assistant):\\s*", "");
-                migrated.addConversationMessage(role, content);
-            }
-        }
-        if (legacyState.getTripId() != null) {
-            migrated.setItineraryStatus(UnifiedAgentState.ItineraryStatus.GENERATING);
-            migrated.setCurrentPhase(UnifiedAgentState.ExecutionPhase.GENERATING_ITINERARY);
-        }
-        return migrated;
     }
 }
