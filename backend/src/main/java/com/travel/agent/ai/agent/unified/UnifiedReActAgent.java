@@ -359,51 +359,49 @@ public class UnifiedReActAgent {
     }
 
     /**
-     * ReAct 中的 "Observe" 阶段：根据工具执行结果更新 AgentState。
+     * ReAct 中的 "Observe" 阶段：校验工具结果并确认阶段转换。
      *
-     * <p>不同工具的状态更新逻辑：
+     * <p>职责说明（迁移至 UnifiedAgentState 后）：
      * <ul>
-     *   <li>{@code conversation}：增加对话轮次计数，追加对话历史，进入 COLLECTING_INFO 阶段</li>
-     *   <li>{@code recommend_destinations}：将推荐列表写入 state，进入 RECOMMENDATION_READY 阶段</li>
-     *   <li>{@code generate_itinerary}：将生成的 tripId 写入 state，进入 ITINERARY_STARTED 阶段</li>
-     *   <li>{@code FINISH}：进入 COMPLETED 阶段</li>
-     *   <li>执行失败：进入 FAILED 阶段</li>
+     *   <li>各 Unified 工具已在内部完成数据写入（历史、推荐列表、tripId、itineraryStatus、phase）</li>
+     *   <li>本方法仅负责：失败兜底（置 FAILED）+ 阶段确认（防止工具未设置 phase 时状态卡住）</li>
+     *   <li>不再重复写对话历史（Bug 1 修复：原 appendConversationHistory 已删除）</li>
+     *   <li>不再重复写 recommendations / tripId（Minor Issue 4 修复：工具已写入）</li>
      * </ul>
      *
      * @param state  当前 Agent 状态
      * @param result 工具执行结果
-     * @return 更新后的 {@link AgentState}
+     * @return 更新后的 {@link UnifiedAgentState}
      */
     private UnifiedAgentState observe(UnifiedAgentState state, ActionResult result) {
         state.setMetadata("lastAction", result.getToolName());
 
-        // 工具执行失败时，直接将 state 置为 FAILED，终止后续处理
+        // 工具执行失败：置 FAILED 并记录错误，终止后续处理
         if (!Boolean.TRUE.equals(result.getSuccess())) {
             state.setCurrentPhase(UnifiedAgentState.ExecutionPhase.FAILED);
             state.addError(result.getError() != null ? result.getError() : "Tool execution failed");
             return state;
         }
 
+        // 以下仅作为防御性阶段确认——Unified 工具已在内部设置 phase，
+        // 此处兜底确保即使工具遗漏 setCurrentPhase() 调用，状态也能正确流转。
         String toolName = result.getToolName();
         if (IntentRouter.TOOL_CONVERSATION.equals(toolName)) {
-            appendConversationHistory(state, result);
-            state.setCurrentPhase(UnifiedAgentState.ExecutionPhase.CONVERSING);
+            // 对话历史由 UnifiedConversationTool 直接写入，此处不重复操作
+            if (state.getCurrentPhase() != UnifiedAgentState.ExecutionPhase.CONVERSING) {
+                state.setCurrentPhase(UnifiedAgentState.ExecutionPhase.CONVERSING);
+            }
         } else if (IntentRouter.TOOL_RECOMMEND.equals(toolName)) {
-            // 推荐工具：将 List<AIDestinationRecommendation> 写入 state
-            if (result.getResult() instanceof List<?> recommendations) {
-                @SuppressWarnings("unchecked")
-                List<com.travel.agent.dto.AIDestinationRecommendation> typed =
-                        (List<com.travel.agent.dto.AIDestinationRecommendation>) recommendations;
-                state.setRecommendations(typed);
+            // 推荐列表由 UnifiedRecommendationTool 直接写入，此处不重复操作
+            if (state.getCurrentPhase() != UnifiedAgentState.ExecutionPhase.AWAITING_SELECTION) {
+                state.setCurrentPhase(UnifiedAgentState.ExecutionPhase.AWAITING_SELECTION);
             }
-            state.setCurrentPhase(UnifiedAgentState.ExecutionPhase.AWAITING_SELECTION);
         } else if (IntentRouter.TOOL_GENERATE.equals(toolName)) {
-            // 行程生成工具：将异步创建的 tripId 写入 state，前端可据此轮询进度
-            if (result.getResult() instanceof Long tripId) {
-                state.setTripId(tripId);
+            // tripId 由 UnifiedItineraryGenerationTool 直接写入，此处不重复操作
+            if (state.getCurrentPhase() != UnifiedAgentState.ExecutionPhase.GENERATING_ITINERARY) {
+                state.setCurrentPhase(UnifiedAgentState.ExecutionPhase.GENERATING_ITINERARY);
+                state.setItineraryStatus(UnifiedAgentState.ItineraryStatus.GENERATING);
             }
-            state.setCurrentPhase(UnifiedAgentState.ExecutionPhase.GENERATING_ITINERARY);
-            state.setItineraryStatus(UnifiedAgentState.ItineraryStatus.GENERATING);
         } else if (IntentRouter.TOOL_FINISH.equalsIgnoreCase(toolName)) {
             state.setCurrentPhase(UnifiedAgentState.ExecutionPhase.COMPLETED);
             if (state.getTripId() != null) {
@@ -412,28 +410,6 @@ public class UnifiedReActAgent {
         }
 
         return state;
-    }
-
-    /**
-     * 将本轮用户消息和 AI 回复追加到会话历史，并按配置限制历史条数（滑动窗口）。
-     *
-     * <p>历史格式为字符串列表，交替存储 "user: ..." 和 "assistant: ..." 条目，
-     * 后续 LLM 调用可将其拼接为上下文 prompt。
-     *
-     * <p>历史条数上限 = max(4, conversationHistoryLimit)，保证至少保留 2 轮对话。
-     * 超出上限时从头部截断（保留最近的对话）。
-     *
-     * @param state  当前 Agent 状态（会话历史存储于此）
-     * @param result 本轮对话工具的执行结果（含 AI 回复内容）
-     */
-    private void appendConversationHistory(UnifiedAgentState state, ActionResult result) {
-        state.addConversationMessage("user", state.getCurrentMessage());
-
-        if (result.getResult() instanceof com.travel.agent.dto.response.ChatResponse chatResponse) {
-            state.addConversationMessage("assistant", chatResponse.getMessage());
-        } else if (result.getObservation() != null) {
-            state.addConversationMessage("assistant", result.getObservation());
-        }
     }
 
     /**

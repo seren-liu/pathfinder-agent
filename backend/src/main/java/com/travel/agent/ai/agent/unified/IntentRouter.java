@@ -3,37 +3,52 @@ package com.travel.agent.ai.agent.unified;
 import com.travel.agent.dto.unified.UnifiedTravelIntent;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 
 /**
- * 确定性意图路由器（纯 Java 决策）
+ * 确定性意图路由器 —— 纯数据驱动决策，不依赖消息关键词。
+ *
+ * <p>路由优先级（从高到低）：
+ * <ol>
+ *   <li>终止条件：shouldTerminate / tripId 已创建 / 告别语</li>
+ *   <li>"换一批"：用户主动刷新推荐</li>
+ *   <li>已选定目的地 + 天数 + 预算 → 生成行程</li>
+ *   <li>城市级目的地 + 天数 + 预算 → 生成行程</li>
+ *   <li>模糊/国家/区域目的地 + 天数 + 预算 → 推荐具体目的地</li>
+ *   <li>缺少目的地 / 天数 / 预算 → 对话收集</li>
+ * </ol>
+ *
+ * <p>设计原则：一旦三要素（目的地方向 + 天数 + 预算）收集完成，立即自动跳转，
+ * 无需等待用户说"开始"等特定关键词。消息内容仅用于检测"换一批"等显式覆盖指令。
  */
 @Component
 public class IntentRouter {
 
     public static final String TOOL_CONVERSATION = "conversation";
-    public static final String TOOL_RECOMMEND = "recommend_destinations";
-    public static final String TOOL_GENERATE = "generate_itinerary";
-    public static final String TOOL_FINISH = "FINISH";
+    public static final String TOOL_RECOMMEND    = "recommend_destinations";
+    public static final String TOOL_GENERATE     = "generate_itinerary";
+    public static final String TOOL_FINISH       = "FINISH";
 
     public Decision route(UnifiedAgentState state) {
+        // ── 1. 基础防御 ──────────────────────────────────────────────
         if (state == null) {
             return Decision.of(TOOL_CONVERSATION, "state_missing", UnifiedAgentState.ExecutionPhase.CONVERSING);
         }
-
         if (Boolean.TRUE.equals(state.getShouldTerminate())) {
-            return Decision.of(TOOL_FINISH, "terminated:" + nullSafe(state.getTerminationReason()), UnifiedAgentState.ExecutionPhase.COMPLETED);
+            return Decision.of(TOOL_FINISH,
+                    "terminated:" + nullSafe(state.getTerminationReason()),
+                    UnifiedAgentState.ExecutionPhase.COMPLETED);
         }
-
         if (state.getTripId() != null) {
             return Decision.of(TOOL_FINISH, "trip_already_started", UnifiedAgentState.ExecutionPhase.COMPLETED);
         }
 
-        String message = state.getCurrentMessage() == null ? "" : state.getCurrentMessage().trim().toLowerCase(Locale.ROOT);
+        String message = state.getCurrentMessage() == null
+                ? ""
+                : state.getCurrentMessage().trim().toLowerCase(Locale.ROOT);
         UnifiedTravelIntent intent = state.getIntent();
 
+        // ── 2. 告别检测 ───────────────────────────────────────────────
         if (isClosingMessage(message) && hasConversationHistory(state)) {
             return Decision.of(TOOL_FINISH, "user_end_of_conversation", UnifiedAgentState.ExecutionPhase.COMPLETED);
         }
@@ -42,165 +57,112 @@ public class IntentRouter {
             return Decision.of(TOOL_CONVERSATION, "intent_missing", UnifiedAgentState.ExecutionPhase.CONVERSING);
         }
 
-        boolean explicitGenerateRequest = isItineraryGenerationRequest(message);
-        boolean implicitGenerateRequest = isImplicitItineraryConfirmation(message);
-        boolean itineraryGenerationRequested = explicitGenerateRequest || implicitGenerateRequest;
-        boolean recommendationEligible = isRecommendationEligible(intent);
-
-        // 用户明确要求开始生成时，只要核心字段齐全且目的地足够具体（城市/国家/已选择推荐），直接生成。
-        if (itineraryGenerationRequested && canForceGenerate(intent, state)) {
-            return Decision.of(
-                    TOOL_GENERATE,
-                    "explicit_generate_request_with_sufficient_inputs",
-                    UnifiedAgentState.ExecutionPhase.GENERATING_ITINERARY
-            );
-        }
-
-        if (Boolean.TRUE.equals(intent.getReadyForItinerary())) {
-            if (hasItineraryInputs(intent, state, itineraryGenerationRequested)) {
-                String routeReason = explicitGenerateRequest
-                        ? "intent_ready_for_itinerary"
-                        : (state.getSelectedDestination() != null
-                        ? "selected_destination_ready_for_itinerary"
-                        : "implicit_itinerary_confirmation");
-                return Decision.of(TOOL_GENERATE, routeReason, UnifiedAgentState.ExecutionPhase.GENERATING_ITINERARY);
-            }
-
-            if (!itineraryGenerationRequested) {
-                if (!recommendationEligible) {
-                    return Decision.of(
-                            TOOL_CONVERSATION,
-                            "awaiting_itinerary_confirmation",
-                            UnifiedAgentState.ExecutionPhase.CONVERSING
-                    );
-                }
-
-                List<String> missingForRecommend = missingRecommendationFields(state, intent);
-                if (missingForRecommend.isEmpty()) {
-                    return Decision.of(
-                            TOOL_RECOMMEND,
-                            "itinerary_not_confirmed_recommendation_first",
-                            UnifiedAgentState.ExecutionPhase.RECOMMENDING
-                    );
-                }
-                return Decision.of(
-                        TOOL_CONVERSATION,
-                        "missing_recommendation_fields:" + String.join(",", missingForRecommend),
-                        UnifiedAgentState.ExecutionPhase.CONVERSING
-                );
-            }
-        }
-
+        // ── 3. "换一批"：刷新推荐（唯一保留的消息关键词覆盖）────────────
         if (isRefreshRecommendationRequest(message)
                 && state.getRecommendations() != null
                 && !state.getRecommendations().isEmpty()) {
-            return Decision.of(TOOL_RECOMMEND, "refresh_recommendation_requested", UnifiedAgentState.ExecutionPhase.RECOMMENDING);
+            return Decision.of(TOOL_RECOMMEND, "refresh_recommendation_requested",
+                    UnifiedAgentState.ExecutionPhase.RECOMMENDING);
         }
 
-        if (Boolean.TRUE.equals(intent.getNeedsRecommendation())) {
-            if (!recommendationEligible) {
-                return Decision.of(
-                        TOOL_CONVERSATION,
-                        "clear_destination_skip_recommendation",
-                        UnifiedAgentState.ExecutionPhase.CONVERSING
-                );
-            }
-            List<String> missing = missingRecommendationFields(state, intent);
-            if (missing.isEmpty()) {
-                return Decision.of(TOOL_RECOMMEND, "intent_needs_recommendation", UnifiedAgentState.ExecutionPhase.RECOMMENDING);
-            }
-            return Decision.of(
-                    TOOL_CONVERSATION,
-                    "missing_recommendation_fields:" + String.join(",", missing),
-                    UnifiedAgentState.ExecutionPhase.CONVERSING
-            );
+        // ── 4. 纯数据驱动路由 ─────────────────────────────────────────
+        boolean hasDestination      = isNotBlank(intent.getDestination());
+        boolean hasDays             = intent.getDays() != null;
+        boolean hasBudget           = intent.getBudget() != null;
+        boolean hasSelectedDest     = state.getSelectedDestination() != null;
+        boolean isCityOrSpecific    = isCityLevelOrSpecific(intent);
+
+        // 4a. 用户已从推荐中选定具体目的地 → 可以生成行程
+        if (hasSelectedDest && hasDays && hasBudget) {
+            return Decision.of(TOOL_GENERATE, "selected_destination_with_full_info",
+                    UnifiedAgentState.ExecutionPhase.GENERATING_ITINERARY);
         }
 
-        return Decision.of(TOOL_CONVERSATION, "need_more_information", UnifiedAgentState.ExecutionPhase.CONVERSING);
+        // 4b. 目的地是明确城市 + 天数 + 预算 → 直接生成行程
+        if (isCityOrSpecific && hasDestination && hasDays && hasBudget) {
+            return Decision.of(TOOL_GENERATE, "city_destination_ready_to_generate",
+                    UnifiedAgentState.ExecutionPhase.GENERATING_ITINERARY);
+        }
+
+        // 4c. 目的地是国家/区域/模糊方向 + 天数 + 预算 → 推荐具体目的地
+        if (hasDestination && !isCityOrSpecific && hasDays && hasBudget) {
+            return Decision.of(TOOL_RECOMMEND, "vague_destination_needs_recommendation",
+                    UnifiedAgentState.ExecutionPhase.RECOMMENDING);
+        }
+
+        // 4d. 信息不足 → 对话收集缺失字段
+        return Decision.of(TOOL_CONVERSATION,
+                buildMissingReason(hasDestination, hasDays, hasBudget),
+                UnifiedAgentState.ExecutionPhase.CONVERSING);
     }
 
-    private List<String> missingRecommendationFields(UnifiedAgentState state, UnifiedTravelIntent intent) {
-        List<String> missing = new ArrayList<>();
-        boolean hasDestination = isNotBlank(intent.getDestination());
-        boolean hasPreferenceSignals = (intent.getInterests() != null && !intent.getInterests().isEmpty())
-                || isNotBlank(intent.getMood());
-        boolean hasDuration = intent.getDays() != null;
-        boolean hasBudget = intent.getBudget() != null;
+    // ── 辅助：目的地级别判断 ─────────────────────────────────────────────
 
-        boolean allowSkipPreferences = shouldAllowRecommendationWithoutPreferences(
-                state, hasDestination, hasDuration, hasBudget
-        );
-
-        if (!hasPreferenceSignals && !allowSkipPreferences) {
-            missing.add("preferences");
-        }
-        if (!hasDuration) {
-            missing.add("days");
-        }
-        if (!hasBudget) {
-            missing.add("budget");
-        }
-        return missing;
-    }
-
-    private boolean shouldAllowRecommendationWithoutPreferences(
-            UnifiedAgentState state,
-            boolean hasDestination,
-            boolean hasDuration,
-            boolean hasBudget
-    ) {
-        if (!hasDestination || !hasDuration || !hasBudget) {
-            return false;
-        }
-        return hasConversationHistory(state);
-    }
-
-    private boolean hasItineraryInputs(UnifiedTravelIntent intent, UnifiedAgentState state, boolean explicitGenerateRequest) {
-        boolean hasCoreFields = intent.getDays() != null && intent.getBudget() != null;
-        boolean hasSelectedDestination = state.getSelectedDestination() != null;
-        boolean hasExplicitDestinationForGenerate = isNotBlank(intent.getDestination()) && explicitGenerateRequest;
-        return hasCoreFields && (hasSelectedDestination || hasExplicitDestinationForGenerate);
-    }
-
-    private boolean canForceGenerate(UnifiedTravelIntent intent, UnifiedAgentState state) {
-        if (intent == null) {
-            return false;
-        }
-        boolean hasCoreFields = intent.getDays() != null && intent.getBudget() != null;
-        if (!hasCoreFields) {
-            return false;
-        }
-        if (state != null && state.getSelectedDestination() != null) {
+    /**
+     * 判断目的地是否足够具体（城市级），可以直接生成行程而无需先推荐。
+     *
+     * <p>判断优先级：
+     * <ol>
+     *   <li>destinationType == CITY → 明确城市，无需推荐</li>
+     *   <li>destinationType == COUNTRY / REGION / VAGUE → 模糊，需要推荐</li>
+     *   <li>destinationType == UNKNOWN / null → 用 readyForItinerary 规则兜底
+     *       （该 flag 由 StructuredIntentExtractor 的规则路径基于完整 ISO token 集合推断）</li>
+     * </ol>
+     */
+    private boolean isCityLevelOrSpecific(UnifiedTravelIntent intent) {
+        if (intent == null) return false;
+        UnifiedTravelIntent.DestinationType type = intent.getDestinationType();
+        if (type == UnifiedTravelIntent.DestinationType.CITY) {
             return true;
         }
-        if (!isNotBlank(intent.getDestination())) {
+        if (type == UnifiedTravelIntent.DestinationType.COUNTRY
+                || type == UnifiedTravelIntent.DestinationType.REGION
+                || type == UnifiedTravelIntent.DestinationType.VAGUE) {
             return false;
         }
-        UnifiedTravelIntent.DestinationType destinationType = intent.getDestinationType();
-        if (destinationType == null || destinationType == UnifiedTravelIntent.DestinationType.UNKNOWN) {
-            return true;
-        }
-        return destinationType == UnifiedTravelIntent.DestinationType.CITY
-                || destinationType == UnifiedTravelIntent.DestinationType.COUNTRY;
+        // UNKNOWN 或 null：回退到规则路径设置的 readyForItinerary 标志
+        return Boolean.TRUE.equals(intent.getReadyForItinerary());
     }
 
     /**
-     * 仅当目的地是国家/区域/模糊层级时进入推荐流程。
+     * 构造缺少信息的路由原因字符串，便于日志追踪。
      */
-    private boolean isRecommendationEligible(UnifiedTravelIntent intent) {
-        if (intent == null) {
-            return true;
-        }
-        if (!isNotBlank(intent.getDestination())) {
-            return true;
-        }
-
-        UnifiedTravelIntent.DestinationType destinationType = intent.getDestinationType();
-        if (destinationType == null || destinationType == UnifiedTravelIntent.DestinationType.UNKNOWN) {
-            return true;
-        }
-        return destinationType != UnifiedTravelIntent.DestinationType.CITY;
+    private String buildMissingReason(boolean hasDestination, boolean hasDays, boolean hasBudget) {
+        if (!hasDestination && !hasDays && !hasBudget) return "missing:destination,days,budget";
+        if (!hasDestination && !hasDays)  return "missing:destination,days";
+        if (!hasDestination && !hasBudget) return "missing:destination,budget";
+        if (!hasDays && !hasBudget)        return "missing:days,budget";
+        if (!hasDestination) return "missing:destination";
+        if (!hasDays)        return "missing:days";
+        if (!hasBudget)      return "missing:budget";
+        return "need_more_information";
     }
+
+    // ── 辅助：消息检测（仅保留必要的两个）─────────────────────────────────
+
+    /**
+     * 检测用户是否在结束对话（精确匹配，避免误触发）。
+     */
+    private boolean isClosingMessage(String message) {
+        return message.equals("thanks")
+                || message.equals("thank you")
+                || message.equals("bye")
+                || message.equals("goodbye")
+                || message.equals("谢谢")
+                || message.equals("再见");
+    }
+
+    /**
+     * 检测用户是否要求刷新推荐列表（"换一批"等）。
+     */
+    private boolean isRefreshRecommendationRequest(String message) {
+        return message.contains("换一批")
+                || message.contains("another batch")
+                || message.contains("more options")
+                || message.contains("different options");
+    }
+
+    // ── 通用工具方法 ───────────────────────────────────────────────────────
 
     private boolean isNotBlank(String text) {
         return text != null && !text.isBlank();
@@ -212,80 +174,11 @@ public class IntentRouter {
                 && !state.getConversationHistory().isEmpty();
     }
 
-    private boolean isClosingMessage(String message) {
-        return message.equals("thanks")
-                || message.equals("thank you")
-                || message.equals("bye")
-                || message.equals("goodbye")
-                || message.equals("谢谢")
-                || message.equals("再见");
-    }
-
-    private boolean isRefreshRecommendationRequest(String message) {
-        return message.contains("换一批")
-                || message.contains("another batch")
-                || message.contains("more options")
-                || message.contains("different options");
-    }
-
-    private boolean isItineraryGenerationRequest(String message) {
-        return message.contains("生成行程")
-                || message.contains("规划行程")
-                || message.contains("安排行程")
-                || message.contains("开始生成")
-                || message.contains("开始规划")
-                || message.contains("开始吧")
-                || message.contains("开始")
-                || message.contains("可以开始")
-                || message.contains("确认开始")
-                || message.contains("就这样")
-                || message.contains("直接生成")
-                || message.contains("generate itinerary")
-                || message.contains("build itinerary")
-                || message.contains("plan itinerary")
-                || message.contains("start itinerary")
-                || message.contains("start now")
-                || message.contains("go ahead");
-    }
-
-    private boolean isImplicitItineraryConfirmation(String message) {
-        if (!isNotBlank(message) || containsAdjustmentSignal(message)) {
-            return false;
-        }
-        return isAffirmativeStartMessage(message);
-    }
-
-    private boolean isAffirmativeStartMessage(String message) {
-        return message.contains("开始吧")
-                || message.contains("就这样")
-                || message.contains("按这个")
-                || message.contains("可以开始")
-                || message.contains("直接开始")
-                || message.contains("开始规划")
-                || message.contains("开始安排行程")
-                || message.contains("go ahead")
-                || message.contains("start now")
-                || message.contains("let's go")
-                || message.contains("lets go")
-                || message.matches("^(好|好的|行|可以|ok|okay|没问题)[!！。,. ]*$");
-    }
-
-    private boolean containsAdjustmentSignal(String message) {
-        return message.contains("改")
-                || message.contains("调整")
-                || message.contains("换成")
-                || message.contains("先别")
-                || message.contains("先不")
-                || message.contains("重新")
-                || message.contains("change")
-                || message.contains("adjust")
-                || message.contains("instead")
-                || message.contains("not now");
-    }
-
     private String nullSafe(String value) {
         return value == null ? "unknown" : value;
     }
+
+    // ── 路由决策结果 ───────────────────────────────────────────────────────
 
     public record Decision(String toolName, String reason, UnifiedAgentState.ExecutionPhase nextPhase) {
         public static Decision of(String toolName, String reason, UnifiedAgentState.ExecutionPhase nextPhase) {

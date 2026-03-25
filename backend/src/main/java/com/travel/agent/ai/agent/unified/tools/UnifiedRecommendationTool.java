@@ -51,18 +51,11 @@ public class UnifiedRecommendationTool implements UnifiedAgentTool {
             
             UnifiedTravelIntent intent = state.getIntent();
             
-            // 2. 检查是否真的需要推荐
-            if (!Boolean.TRUE.equals(intent.getNeedsRecommendation())) {
-                log.warn("Intent does not need recommendation, but tool was called");
-                return ActionResult.builder()
-                    .toolName(getToolName())
-                    .success(false)
-                    .observation("Intent does not require recommendations")
-                    .error("needsRecommendation is false")
-                    .build();
-            }
-            
-            // 3. 构建 ParseIntentResponse（适配现有服务）
+            // 2. 构建 ParseIntentResponse（适配现有服务）
+            // Minor Issue 5 修复：移除 needsRecommendation 前置校验。
+            // IntentRouter 存在多条合法路由到此工具的路径（换一批、itinerary_not_confirmed 等），
+            // 这些路径下 needsRecommendation 可能为 false，过严校验会错误拒绝合法请求。
+            // 工具应信任路由器的决策，直接执行推荐逻辑。
             ParseIntentResponse parsedIntent = buildParsedIntent(intent);
             
             // 4. 获取排除列表

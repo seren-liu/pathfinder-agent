@@ -49,25 +49,18 @@ public class UnifiedItineraryGenerationTool implements UnifiedAgentTool {
                     .build();
             }
             
-            // 2. 检查是否准备好生成行程
-            if (!Boolean.TRUE.equals(intent.getReadyForItinerary())) {
-                log.warn("Intent is not ready for itinerary generation");
-                return ActionResult.builder()
-                    .toolName(getToolName())
-                    .success(false)
-                    .observation("Intent is not ready for itinerary. Need more information or destination selection.")
-                    .error("readyForItinerary is false")
-                    .build();
-            }
-            
-            // 3. 检查是否有足够信息
+            // 2. 检查是否有足够信息（Bug 3 修复）
+            // 原来检查 readyForItinerary 标志位，但 IntentRouter.canForceGenerate() 路径
+            // 在国家级目的地时不保证该标志为 true，导致合法路由被拒绝。
+            // 改为直接检查数据完整性：destination + days + budget 均存在即可生成。
             if (!intent.hasEnoughInfoForItinerary()) {
-                log.warn("Not enough information for itinerary generation");
+                log.warn("Not enough information for itinerary generation: destination={}, days={}, budget={}",
+                    intent.getDestination(), intent.getDays(), intent.getBudget());
                 return ActionResult.builder()
                     .toolName(getToolName())
                     .success(false)
                     .observation("Missing required information: destination, days, or budget")
-                    .error("Insufficient information")
+                    .error("Insufficient information for itinerary generation")
                     .build();
             }
             

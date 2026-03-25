@@ -3,7 +3,6 @@ package com.travel.agent.dto.unified;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -40,11 +39,10 @@ public class UnifiedTravelIntent implements Serializable {
     
     // ========== 会话信息 ==========
     
-    @NotNull(message = "Session ID cannot be null")
+    // Minor Issue 6 修复：移除 @NotNull，因为 createDefault(null, null) 是合法的初始状态
     @Schema(description = "会话ID", example = "550e8400-e29b-41d4-a716-446655440000")
     private String sessionId;
-    
-    @NotNull(message = "User ID cannot be null")
+
     @Schema(description = "用户ID", example = "1")
     private Long userId;
     

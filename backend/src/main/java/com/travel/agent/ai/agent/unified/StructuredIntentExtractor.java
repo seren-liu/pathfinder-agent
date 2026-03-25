@@ -40,6 +40,11 @@ public class StructuredIntentExtractor {
               "properties": {
                 "travel_related": { "type": "boolean" },
                 "destination": { "type": ["string", "null"] },
+                "destination_type": {
+                  "type": ["string", "null"],
+                  "enum": ["city", "country", "region", "vague", "unknown", null],
+                  "description": "city=specific city/place, country=a whole country, region=continent or multi-country area, vague=generic concept like beach/mountains, unknown=unclear"
+                },
                 "days": { "type": ["integer", "null"], "minimum": 1, "maximum": 30 },
                 "budget": { "type": ["string", "null"] },
                 "interests": { "type": "array", "items": { "type": "string" } },
@@ -57,6 +62,7 @@ public class StructuredIntentExtractor {
               "required": [
                 "travel_related",
                 "destination",
+                "destination_type",
                 "days",
                 "budget",
                 "interests",
@@ -98,7 +104,9 @@ public class StructuredIntentExtractor {
             log.info("⚡ Intent extracted via rules: duration={}ms, message='{}'",
                     System.currentTimeMillis() - start,
                     abbreviate(userMessage, 40));
-            return mergeToUnified(previousIntent, ruleMergedIntent);
+            // 规则路径：无 LLM destination_type，使用内部 token 集合推断（覆盖完整 ISO 国家列表）
+            String inferredType = inferDestinationTypeFromTokens(ruleMergedIntent.getDestination());
+            return mergeToUnified(previousIntent, ruleMergedIntent, inferredType);
         }
 
         // Rule-based found no new travel info. If a previous intent exists, preserve it —
@@ -119,10 +127,12 @@ public class StructuredIntentExtractor {
 
             ExtractedIntent payload = objectMapper.readValue(argumentsJson, ExtractedIntent.class);
             TravelIntent mergedLegacyIntent = mergeAndNormalize(previousLegacyIntent, payload, userMessage);
-            log.info("🧠 Intent extracted via LLM function call: duration={}ms, message='{}'",
+            log.info("🧠 Intent extracted via LLM function call: duration={}ms, message='{}', destination_type={}",
                     System.currentTimeMillis() - start,
-                    abbreviate(userMessage, 40));
-            return mergeToUnified(previousIntent, mergedLegacyIntent);
+                    abbreviate(userMessage, 40),
+                    payload.destinationType);
+            // LLM 路径：直接使用 LLM 返回的 destination_type（最准确）
+            return mergeToUnified(previousIntent, mergedLegacyIntent, payload.destinationType);
         } catch (Exception e) {
             log.warn("Structured intent extraction failed, fallback to previous/default intent: {}", e.getMessage());
             if (previousIntent != null) {
@@ -434,22 +444,77 @@ public class StructuredIntentExtractor {
         return message.length() <= max ? message : message.substring(0, max) + "...";
     }
 
-    private UnifiedTravelIntent mergeToUnified(UnifiedTravelIntent previousIntent, TravelIntent mergedLegacyIntent) {
+    /**
+     * 将 TravelIntent 合并转换为 UnifiedTravelIntent，并应用 LLM 或内部推断的目的地类型。
+     *
+     * <p>destinationType 来源优先级：
+     * <ol>
+     *   <li>LLM 路径：直接使用 LLM Function Calling 返回的 {@code destinationType}（最准确）</li>
+     *   <li>规则路径：使用 {@link #inferDestinationTypeFromTokens} 基于完整 ISO 国家 token 集合推断</li>
+     *   <li>兜底：保留 {@link StateConverter} 的推断结果（仅覆盖 8 个大国，已知不完整，不依赖）</li>
+     * </ol>
+     */
+    private UnifiedTravelIntent mergeToUnified(
+            UnifiedTravelIntent previousIntent,
+            TravelIntent mergedLegacyIntent,
+            String llmDestinationType
+    ) {
         Long userId = previousIntent != null ? previousIntent.getUserId() : null;
         String sessionId = previousIntent != null ? previousIntent.getSessionId() : null;
         UnifiedTravelIntent converted = StateConverter.fromTravelIntent(mergedLegacyIntent, userId, sessionId);
+
+        // 将 LLM 或 token 推断的目的地类型映射为枚举并覆盖 StateConverter 的推断
+        UnifiedTravelIntent.DestinationType resolvedType = mapToDestinationType(llmDestinationType);
+
         if (previousIntent == null) {
-            return converted;
+            return resolvedType != null
+                    ? converted.toBuilder().destinationType(resolvedType).build()
+                    : converted;
         }
-        return converted.toBuilder()
+
+        UnifiedTravelIntent.UnifiedTravelIntentBuilder builder = converted.toBuilder()
                 .sessionId(previousIntent.getSessionId())
                 .userId(previousIntent.getUserId())
                 .destinationCountry(previousIntent.getDestinationCountry())
                 .destinationLatitude(previousIntent.getDestinationLatitude())
                 .destinationLongitude(previousIntent.getDestinationLongitude())
                 .partySize(previousIntent.getPartySize())
-                .travelStyle(previousIntent.getTravelStyle())
-                .build();
+                .travelStyle(previousIntent.getTravelStyle());
+
+        if (resolvedType != null) {
+            builder.destinationType(resolvedType);
+        }
+
+        return builder.build();
+    }
+
+    /**
+     * 将字符串形式的目的地类型（LLM 输出）映射为枚举值。
+     * 返回 null 表示无有效输入，调用方应保留已有值。
+     */
+    private UnifiedTravelIntent.DestinationType mapToDestinationType(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        return switch (raw.trim().toLowerCase(Locale.ROOT)) {
+            case "city"    -> UnifiedTravelIntent.DestinationType.CITY;
+            case "country" -> UnifiedTravelIntent.DestinationType.COUNTRY;
+            case "region"  -> UnifiedTravelIntent.DestinationType.REGION;
+            case "vague"   -> UnifiedTravelIntent.DestinationType.VAGUE;
+            default        -> UnifiedTravelIntent.DestinationType.UNKNOWN;
+        };
+    }
+
+    /**
+     * 规则路径的目的地类型推断：使用与 {@link #isCountryLevelDestination} 相同的完整 ISO 国家 token 集合，
+     * 覆盖 StateConverter 中只有 8 个大国的不完整硬编码列表。
+     *
+     * @return "country" / "region" / null（null 表示可能是城市或未知，交由 StateConverter 兜底）
+     */
+    private String inferDestinationTypeFromTokens(String destination) {
+        if (destination == null || destination.isBlank()) return null;
+        String normalized = normalizeGeoToken(destination);
+        if (REGION_TOKENS.contains(normalized))  return "region";
+        if (COUNTRY_TOKENS.contains(normalized)) return "country";
+        return null;
     }
 
     private String buildExtractionPrompt(String userMessage, TravelIntent previousIntent) {
@@ -477,6 +542,13 @@ public class StructuredIntentExtractor {
                 4) interests must be an array (empty array allowed).
                 5) companion_type should be one of: solo/couple/family/friends/unknown/null.
                 6) travel_related=false only for non-travel casual chat.
+                7) destination_type classification:
+                   - "city"    → a specific city or named place (Tokyo, Paris, Machu Picchu, Bali)
+                   - "country" → an entire country (Japan, France, Thailand, Morocco)
+                   - "region"  → a continent or multi-country area (Southeast Asia, Europe, East Africa)
+                   - "vague"   → a generic geographic concept (beach, mountains, island, tropical)
+                   - "unknown" → destination is not mentioned or completely unclear
+                   Set destination_type=null only when destination is null.
                 """.formatted(userMessage, previous);
     }
 
@@ -898,5 +970,7 @@ public class StructuredIntentExtractor {
         public Double confidence;
         @JsonProperty("user_goal")
         public String userGoal;
+        @JsonProperty("destination_type")
+        public String destinationType;
     }
 }
