@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
+
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -99,23 +99,26 @@ public class StructuredIntentExtractor {
         long start = System.currentTimeMillis();
         TravelIntent previousLegacyIntent = StateConverter.toTravelIntent(previousIntent);
 
-        TravelIntent ruleMergedIntent = tryRuleBasedMerge(previousLegacyIntent, userMessage);
-        if (ruleMergedIntent != null) {
-            log.info("⚡ Intent extracted via rules: duration={}ms, message='{}'",
-                    System.currentTimeMillis() - start,
-                    abbreviate(userMessage, 40));
-            // 规则路径：无 LLM destination_type，使用内部 token 集合推断（覆盖完整 ISO 国家列表）
-            String inferredType = inferDestinationTypeFromTokens(ruleMergedIntent.getDestination());
-            return mergeToUnified(previousIntent, ruleMergedIntent, inferredType);
+        // Fast path ONLY when ALL three conditions are met:
+        // 1. A previous intent already exists (not the very first message in a session)
+        // 2. The message is purely structural: only days/budget/companion numbers, no semantic words
+        // Rationale: a purely structural message cannot contain interests/mood/destination
+        //            information, so skipping LLM loses nothing. Every other message — including
+        //            the first one — always goes to LLM so semantic meaning is never dropped.
+        if (previousIntent != null && isPurelyStructuralUpdate(userMessage)) {
+            TravelIntent ruleMerged = tryRuleBasedMerge(previousLegacyIntent, userMessage);
+            if (ruleMerged != null) {
+                log.info("⚡ Structural-only update via rules: duration={}ms, message='{}'",
+                        System.currentTimeMillis() - start, abbreviate(userMessage, 40));
+                String inferredType = inferDestinationTypeFromTokens(ruleMerged.getDestination());
+                return mergeToUnified(previousIntent, ruleMerged, inferredType);
+            }
         }
 
-        // Rule-based found no new travel info. If a previous intent exists, preserve it —
-        // no LLM call needed. The IntentRouter will decide the next action from the current state.
-        if (previousIntent != null) {
-            log.info("⚡ No new travel info, preserving existing intent ({}ms)", System.currentTimeMillis() - start);
-            return previousIntent;
-        }
-
+        // All other cases → LLM intent extraction:
+        //   - First message (no previous intent): LLM always
+        //   - Messages with any semantic content (interests, mood, destination, preferences): LLM
+        //   - Ambiguous or mixed messages: LLM
         String prompt = buildExtractionPrompt(userMessage, previousLegacyIntent);
         try {
             String argumentsJson = aiService.chatWithFunctionCall(
@@ -127,14 +130,13 @@ public class StructuredIntentExtractor {
 
             ExtractedIntent payload = objectMapper.readValue(argumentsJson, ExtractedIntent.class);
             TravelIntent mergedLegacyIntent = mergeAndNormalize(previousLegacyIntent, payload, userMessage);
-            log.info("🧠 Intent extracted via LLM function call: duration={}ms, message='{}', destination_type={}",
+            log.info("🧠 Intent extracted via LLM: duration={}ms, message='{}', destination_type={}",
                     System.currentTimeMillis() - start,
                     abbreviate(userMessage, 40),
                     payload.destinationType);
-            // LLM 路径：直接使用 LLM 返回的 destination_type（最准确）
             return mergeToUnified(previousIntent, mergedLegacyIntent, payload.destinationType);
         } catch (Exception e) {
-            log.warn("Structured intent extraction failed, fallback to previous/default intent: {}", e.getMessage());
+            log.warn("Intent extraction failed, preserving previous/default intent: {}", e.getMessage());
             if (previousIntent != null) {
                 return previousIntent;
             }
@@ -142,12 +144,58 @@ public class StructuredIntentExtractor {
         }
     }
 
+    /**
+     * Returns true only when the message contains PURELY structural data — days, budget, or
+     * companion type — with no semantic words (interests, mood, destination, preferences).
+     *
+     * <p>Strategy: strip all recognised structural tokens, then check whether any meaningful
+     * text remains. If ≤ 2 characters survive, the message is structural-only and safe to
+     * process without LLM.
+     *
+     * <p>Examples:
+     * <ul>
+     *   <li>"8天"          → structural ✓ (only days)</li>
+     *   <li>"80000人民币"  → structural ✓ (only budget)</li>
+     *   <li>"一个人待8天"   → structural ✓ (companion + days)</li>
+     *   <li>"我想去泡温泉，8天" → NOT structural ✗ (semantic content "温泉" remains)</li>
+     *   <li>"喜欢安静的地方"  → NOT structural ✗ (preference text remains)</li>
+     * </ul>
+     */
+    private boolean isPurelyStructuralUpdate(String userMessage) {
+        if (userMessage == null || userMessage.isBlank()) return false;
+        String lower = userMessage.trim().toLowerCase(Locale.ROOT);
+        String remaining = lower;
+
+        // Strip days / weeks expressions
+        remaining = EXPLICIT_DAYS_PATTERN.matcher(remaining).replaceAll(" ");
+        remaining = EXPLICIT_DAYS_RI_TRIP_PATTERN.matcher(remaining).replaceAll(" ");
+        remaining = EXPLICIT_DAYS_VERB_RI_PATTERN.matcher(remaining).replaceAll(" ");
+        remaining = EXPLICIT_WEEKS_PATTERN.matcher(remaining).replaceAll(" ");
+        remaining = EXPLICIT_ONE_WEEK_PATTERN.matcher(remaining).replaceAll(" ");
+
+        // Strip budget expressions
+        remaining = BUDGET_AMOUNT_PATTERN.matcher(remaining).replaceAll(" ");
+
+        // Strip companion-type keywords
+        remaining = remaining.replaceAll(
+                "一个人|单人|独自|两个人|情侣|夫妻|couple|家庭|family|朋友|friends|solo", " ");
+
+        // Strip currency / time units that are safe to ignore
+        remaining = remaining.replaceAll(
+                "人民币|rmb|元|块|万|澳元|美元|港币|usd|dollars|刀|天|晚|夜|周|星期|day|days|night|nights|week|weeks", " ");
+
+        // Strip punctuation and whitespace
+        remaining = remaining.replaceAll("[，。！？,.!?\\s]+", "").trim();
+
+        // If 2 or fewer characters remain, nothing semantic survived → purely structural
+        return remaining.length() <= 2;
+    }
+
     private TravelIntent tryRuleBasedMerge(TravelIntent previousIntent, String userMessage) {
         if (userMessage == null || userMessage.isBlank()) {
             return null;
         }
         String normalizedMessage = userMessage.trim();
-        String lower = normalizedMessage.toLowerCase(Locale.ROOT);
 
         TravelIntent base = previousIntent != null ? previousIntent : defaultGeneralChatIntent();
         TravelIntent.TravelIntentBuilder builder = TravelIntent.builder()
@@ -162,6 +210,10 @@ public class StructuredIntentExtractor {
                 .needsRecommendation(base.getNeedsRecommendation())
                 .readyForItinerary(base.getReadyForItinerary());
 
+        // This method is only called when isPurelyStructuralUpdate() returned true,
+        // so the message contains ONLY days/budget/companion data — no semantic content.
+        // Interests, mood, destination, and geo tokens are intentionally NOT extracted here;
+        // they are always handled by the LLM path.
         boolean changed = false;
 
         Integer explicitDays = extractExplicitDaysFromMessage(normalizedMessage);
@@ -182,30 +234,6 @@ public class StructuredIntentExtractor {
         TravelIntent.CompanionType companionType = extractExplicitCompanionTypeFromMessage(normalizedMessage);
         if (companionType != null) {
             builder.companionType(companionType);
-            changed = true;
-        }
-
-        List<String> interests = extractInterestSignals(lower);
-        if (!interests.isEmpty()) {
-            builder.interests(interests);
-            changed = true;
-        }
-
-        String mood = extractMoodSignal(lower);
-        if (mood != null) {
-            builder.mood(mood);
-            changed = true;
-        }
-
-        // Try to extract a clean geo token first (avoids storing full sentence as destination)
-        String geoToken = extractKnownGeoToken(normalizedMessage, lower);
-        if (geoToken != null && !geoToken.equalsIgnoreCase(base.getDestination())) {
-            if (!isLikelyAffirmationOrControlMessage(normalizedMessage)) {
-                builder.destination(normalizeDestination(geoToken));
-                changed = true;
-            }
-        } else if (shouldTreatAsDestinationUpdate(base, normalizedMessage, explicitBudget, explicitDays, interests, mood)) {
-            builder.destination(normalizeDestination(normalizedMessage));
             changed = true;
         }
 
@@ -264,177 +292,6 @@ public class StructuredIntentExtractor {
         } catch (Exception ignored) {
             return null;
         }
-    }
-
-    private List<String> extractInterestSignals(String lower) {
-        if (lower == null || lower.isBlank()) {
-            return List.of();
-        }
-        LinkedHashSet<String> interests = new LinkedHashSet<>();
-        if (lower.contains("徒步") || lower.contains("hike") || lower.contains("hiking")) {
-            interests.add("hiking");
-        }
-        if (lower.contains("文化") || lower.contains("museum") || lower.contains("history")) {
-            interests.add("culture");
-        }
-        if (lower.contains("美食") || lower.contains("food")) {
-            interests.add("food");
-        }
-        if (lower.contains("海滩") || lower.contains("沙滩") || lower.contains("beach")
-                || lower.contains("冲浪") || lower.contains("surf")) {
-            interests.add("beach");
-        }
-        if (lower.contains("自然") || lower.contains("nature")) {
-            interests.add("nature");
-        }
-        if (lower.contains("动物") || lower.contains("野生") || lower.contains("wildlife")
-                || lower.contains("safari") || lower.contains("丛林")) {
-            interests.add("wildlife");
-        }
-        if (lower.contains("购物") || lower.contains("shopping")) {
-            interests.add("shopping");
-        }
-        return new ArrayList<>(interests);
-    }
-
-    private String extractMoodSignal(String lower) {
-        if (lower == null || lower.isBlank()) {
-            return null;
-        }
-        if (lower.contains("放松") || lower.contains("relax")) {
-            return "relaxing";
-        }
-        if (lower.contains("冒险") || lower.contains("adventure")) {
-            return "adventure";
-        }
-        if (lower.contains("文化") || lower.contains("cultural")) {
-            return "cultural";
-        }
-        return null;
-    }
-
-    /**
-     * Tries to find a known geo token (region or country) in the message and returns just that token.
-     * Returns null if no known token is found.
-     */
-    private String extractKnownGeoToken(String message, String lower) {
-        if (message == null || message.isBlank()) {
-            return null;
-        }
-        // Check REGION_TOKENS first (higher priority — more specific regions like 东南亚)
-        for (String token : REGION_TOKENS) {
-            if (token.length() >= 2 && lower.contains(token)) {
-                int idx = lower.indexOf(token);
-                return message.substring(idx, idx + token.length());
-            }
-        }
-        // Check COUNTRY_TOKENS (only ≥2 chars to avoid single-char false positives)
-        for (String token : COUNTRY_TOKENS) {
-            if (token.length() >= 2 && lower.contains(token)) {
-                int idx = lower.indexOf(token);
-                return message.substring(idx, idx + token.length());
-            }
-        }
-        return null;
-    }
-
-    private boolean shouldTreatAsDestinationUpdate(
-            TravelIntent baseIntent,
-            String message,
-            String explicitBudget,
-            Integer explicitDays,
-            List<String> interests,
-            String mood
-    ) {
-        if (message == null || message.isBlank()) {
-            return false;
-        }
-        if (explicitBudget != null || explicitDays != null || (interests != null && !interests.isEmpty()) || mood != null) {
-            return false;
-        }
-        if (message.length() > 20) {
-            return false;
-        }
-        String lower = message.toLowerCase(Locale.ROOT);
-        if (isLikelyAffirmationOrControlMessage(message)) {
-            return false;
-        }
-        if (lower.contains("多少钱")
-                && !lower.contains("预算")
-                && !lower.contains("几天")) {
-            return false;
-        }
-
-        boolean hasGeoCue = hasExplicitGeoCue(message, lower);
-        String existingDestination = baseIntent != null ? baseIntent.getDestination() : null;
-
-        // 已有目的地时，只有出现明确地理线索才允许改目的地，避免“开始吧/可以”等短语污染 slot。
-        if (isMeaningful(existingDestination)) {
-            return hasGeoCue;
-        }
-
-        // 首次填目的地：必须要有地理线索，或输入本身是典型地名 token（如“摩洛哥”“北非”）。
-        return hasGeoCue || looksLikeStandalonePlaceToken(message);
-    }
-
-    /**
-     * Returns true if the message contains no geo cues and is short enough to be a control phrase
-     * rather than a place name. Used to guard against treating short confirmations as destinations.
-     */
-    private boolean isLikelyAffirmationOrControlMessage(String message) {
-        if (message == null || message.isBlank()) {
-            return false;
-        }
-        String lower = message.toLowerCase(Locale.ROOT);
-        // Any explicit start/confirm trigger is definitely not a destination name
-        return lower.contains("开始") || lower.contains("确认") || lower.contains("继续")
-                || lower.equals("好") || lower.equals("好的") || lower.equals("行")
-                || lower.equals("可以") || lower.equals("是") || lower.equals("是的")
-                || lower.equals("ok") || lower.equals("okay") || lower.equals("yes");
-    }
-
-    private boolean hasExplicitGeoCue(String message, String lower) {
-        if (message == null || message.isBlank()) {
-            return false;
-        }
-        if (lower.contains("想去")
-                || lower.contains("去")
-                || lower.contains("到")
-                || lower.contains("在")
-                || lower.contains("travel to")
-                || lower.contains("visit")
-                || lower.contains("in ")
-                || lower.contains("to ")) {
-            return true;
-        }
-        String normalized = normalizeGeoToken(message);
-        if (COUNTRY_TOKENS.contains(normalized) || REGION_TOKENS.contains(normalized)) {
-            return true;
-        }
-        return lower.contains("国")
-                || lower.contains("洲")
-                || lower.contains("省")
-                || lower.contains("州")
-                || lower.contains("市")
-                || lower.contains("岛")
-                || lower.contains("海岸")
-                || lower.contains("草原")
-                || lower.contains("沙漠");
-    }
-
-    private boolean looksLikeStandalonePlaceToken(String message) {
-        if (message == null || message.isBlank()) {
-            return false;
-        }
-        String normalized = normalizeGeoToken(message);
-        if (normalized.isBlank()) {
-            return false;
-        }
-        if (COUNTRY_TOKENS.contains(normalized) || REGION_TOKENS.contains(normalized)) {
-            return true;
-        }
-        // 兼容简短地名（如“摩洛哥”“北非”）
-        return message.length() <= 8 && !isLikelyAffirmationOrControlMessage(message);
     }
 
     private String abbreviate(String message, int max) {

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.travel.agent.ai.state.TravelPlanningState;
 import com.travel.agent.dto.request.GenerateItineraryRequest;
+import com.travel.agent.dto.response.TripStatusResponse;
 import com.travel.agent.entity.*;
 import com.travel.agent.exception.BusinessException;
 import com.travel.agent.service.*;
@@ -41,6 +42,7 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
     private final RedisTemplate<String, Object> redisTemplate;
     private final ObjectMapper objectMapper;
     private final StateMachineItineraryService stateMachineService;  // 新增：状态机服务
+    private final TripProgressPushService tripProgressPushService;
     
     /**
      * 异步生成行程（核心方法）
@@ -462,6 +464,36 @@ public class ItineraryGenerationServiceImpl implements ItineraryGenerationServic
             redisTemplate.opsForHash().delete(key, "errorMessage");
         }
         redisTemplate.expire(key, 10, TimeUnit.MINUTES);
+
+        String effectiveStatus = status;
+        if (effectiveStatus == null || effectiveStatus.isBlank()) {
+            Object redisStatus = redisTemplate.opsForHash().get(key, "status");
+            effectiveStatus = redisStatus != null ? redisStatus.toString() : null;
+        }
+        if (effectiveStatus == null || effectiveStatus.isBlank()) {
+            Trips trip = tripsService.getById(tripId);
+            effectiveStatus = trip != null ? trip.getStatus() : null;
+        }
+        if (effectiveStatus == null || effectiveStatus.isBlank()) {
+            effectiveStatus = "generating";
+        }
+
+        TripStatusResponse wsPayload = new TripStatusResponse();
+        wsPayload.setTripId(tripId);
+        wsPayload.setProgress(progress);
+        wsPayload.setCurrentStep(message);
+        wsPayload.setStatus(effectiveStatus);
+        if ("failed".equalsIgnoreCase(effectiveStatus)) {
+            wsPayload.setErrorMessage(
+                    (errorMessage != null && !errorMessage.isBlank()) ? errorMessage : getGenerationErrorMessage(tripId)
+            );
+        }
+
+        try {
+            tripProgressPushService.pushProgress(tripId, wsPayload);
+        } catch (Exception e) {
+            log.warn("Failed to push trip progress via WS: tripId={}", tripId, e);
+        }
         
         log.info("📊 Progress updated: tripId={}, progress={}%, step={}", tripId, progress, message);
     }

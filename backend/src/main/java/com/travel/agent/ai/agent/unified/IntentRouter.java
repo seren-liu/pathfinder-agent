@@ -90,7 +90,15 @@ public class IntentRouter {
                     UnifiedAgentState.ExecutionPhase.RECOMMENDING);
         }
 
-        // 4d. 信息不足 → 对话收集缺失字段
+        // 4d. 无明确目的地，但有兴趣/心情 + 天数 + 预算 → 推荐（基于偏好选目的地）
+        boolean hasPreferences = (intent.getInterests() != null && !intent.getInterests().isEmpty())
+                || intent.getMood() != null;
+        if (!hasDestination && hasPreferences && hasDays && hasBudget) {
+            return Decision.of(TOOL_RECOMMEND, "no_destination_preference_based_recommend",
+                    UnifiedAgentState.ExecutionPhase.RECOMMENDING);
+        }
+
+        // 4e. 信息不足 → 对话收集缺失字段
         return Decision.of(TOOL_CONVERSATION,
                 buildMissingReason(hasDestination, hasDays, hasBudget),
                 UnifiedAgentState.ExecutionPhase.CONVERSING);
