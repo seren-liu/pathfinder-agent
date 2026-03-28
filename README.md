@@ -12,7 +12,7 @@
 
 采用结构化意图抽取 + 确定性路由 + LangGraph4j 状态机编排，实现对话、推荐与行程生成闭环
 
-[特性](#核心特性) • [架构](#系统架构) • [快速开始](#快速启动) • [性能](#性能指标) • [监控](#监控系统)
+[特性](#核心特性) • [架构](#架构说明) • [Prompt](#关键-prompt-与-vibe-思路) • [AI 调用](#ai-调用逻辑流式--function-calling-等) • [部署](#部署步骤含-dns--https) • [配置](#配置说明)
 
 </div>
 
@@ -22,11 +22,14 @@
 
 - [核心特性](#核心特性)
 - [技术栈](#技术栈)
-- [系统架构](#系统架构)
+- [架构说明](#架构说明)
+- [关键 Prompt 与 Vibe 思路](#关键-prompt-与-vibe-思路)
+- [AI 调用逻辑（流式 / function calling 等）](#ai-调用逻辑流式--function-calling-等)
+- [当前业务流程与调用链](#当前业务流程与调用链)
 - [性能指标](#性能指标)
 - [快速启动](#快速启动)
+- [部署步骤（含 DNS / HTTPS）](#部署步骤含-dns--https)
 - [配置说明](#配置说明)
-- [监控系统](#监控系统)
 - [项目结构](#项目结构)
 - [贡献指南](#贡献指南)
 
@@ -58,11 +61,6 @@
 - **编辑保存闭环**：`saveEdit` 将快照持久化到 `itinerary_versions` 并推进 `trips.current_version`
 - **API 契约统一**：前端统一以 `src/api/request.js` 作为唯一 request 语义，`src/utils/request.js` 保留兼容导出
 
-### 企业级监控
-- **全链路追踪**：Micrometer + Prometheus 收集 Agent、LLM、RAG、缓存等所有指标
-- **可视化监控**：Grafana 实时仪表板，监控系统健康状态
-- **智能告警**：Alertmanager 支持邮件、Slack、钉钉等多渠道告警
-
 ### 异步任务处理
 - **进度追踪**：Redis 实时追踪行程生成进度（0% → 100%）
 - **后台地理编码**：异步批量处理地理坐标查询，不阻塞主流程
@@ -81,9 +79,6 @@
 | **PostgreSQL** | 14+ | 关系数据库 |
 | **Redis** | 6+ | 缓存 & 会话存储 |
 | **Chroma** | Latest | 向量数据库 |
-| **Micrometer** | Latest | 指标收集 |
-| **Prometheus** | Latest | 时序数据库 |
-| **Grafana** | Latest | 监控可视化 |
 
 ### 前端技术
 | 技术 | 版本 | 用途 |
@@ -99,10 +94,10 @@
 | 模型 | 用途 | 特点 |
 |------|------|------|
 | **Gemini 2.5 Flash Lite** | 主要 LLM | 低成本、默认主模型 |
-| **GPT-4o Mini** | 备用 LLM | 高质量输出，自动降级 |
+| **GPT-5 Mini** | 备用 LLM | 高质量输出，自动降级 |
 | **text-embedding-3-small** | 向量嵌入 | 1536 维，语义检索 |
 
-## 系统架构
+## 架构说明
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -137,6 +132,113 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
+### 架构与代码对应关系（关键落点）
+
+- Agent 主入口：`backend/src/main/java/com/travel/agent/ai/agent/unified/UnifiedReActAgent.java`
+- 意图抽取（结构化）：`backend/src/main/java/com/travel/agent/ai/agent/unified/StructuredIntentExtractor.java`
+- 路由决策（确定性）：`backend/src/main/java/com/travel/agent/ai/agent/unified/IntentRouter.java`
+- 工具执行与超时：`backend/src/main/java/com/travel/agent/ai/agent/unified/ToolRegistry.java`
+- 推荐工作流：`backend/src/main/java/com/travel/agent/ai/graph/RecommendationGraph.java`
+- 行程工作流：`backend/src/main/java/com/travel/agent/ai/graph/TravelPlanningGraph.java`
+- AI 服务调用：`backend/src/main/java/com/travel/agent/service/impl/AIServiceImpl.java`
+- 输入安全与净化：`backend/src/main/java/com/travel/agent/security/InputSanitizer.java`
+- 前端统一请求入口：`frontend/src/api/request.js`
+
+## 关键 Prompt 与 Vibe 思路
+
+### Prompt 设计原则（当前实现）
+
+1. 结构化优先：意图抽取通过 JSON Schema + function calling，减少自由文本歧义。
+2. 决策与生成分离：模型只负责抽取/生成，业务路由由确定性 Java 规则完成。
+3. 约束式输出：推荐与行程 Prompt 约束字段类型、长度、语气和输出格式。
+4. 幻觉抑制：行程生成前接入 RAG 检索，优先引用知识库事实片段。
+5. 可恢复：JSON 清洗、解析兜底、主备模型降级，避免单点失败。
+
+### Vibe 思路（产品体验导向）
+
+- 语气：温和、鼓励、任务导向，强调“帮用户完成一次可落地旅行决策”。
+- 节奏：先收集关键槽位（目的地/天数/预算）再推荐，最后生成行程。
+- 结果：优先可执行建议，而不是泛泛旅游介绍。
+- 质量：通过 Reflection/校验节点提升行程可读性和可执行性。
+
+### 关键 Prompt 入口
+
+- `StructuredIntentExtractor.buildExtractionPrompt(...)`
+- `AIServiceImpl.buildIntentPrompt(...)`
+- `AIServiceImpl.buildRecommendPrompt(...)`
+- `AIServiceImpl.buildDirectRecommendationPrompt(...)`
+
+## AI 调用逻辑（流式 / function calling 等）
+
+### 当前实现
+
+- 默认非流式：后端为标准 HTTP 同步调用，前端未接入 SSE/WebSocket 流式消费。
+- Function Calling：用于结构化意图抽取，入口 `AIService.chatWithFunctionCall(...)`。
+- 主备模型降级：
+  - `ai.primary-provider` 指定主模型（默认 Gemini）
+  - 失败时按 `ai.fallback-provider` 自动切换（默认 OpenAI）
+- 关键超时控制：
+  - `openai.timeout`（HTTP）
+  - `agent.react.execution-timeout`（Agent 总超时）
+  - `agent.react.tool-execution-timeout`（工具级超时）
+
+### 一次请求链路（简化）
+
+1. 前端 `POST /api/agent/chat`（`text/plain`）。
+2. `UnifiedReActAgent` 执行输入验证/净化。
+3. `StructuredIntentExtractor` 通过 function calling 抽取结构化意图。
+4. `IntentRouter` 纯 Java 路由到 `conversation / recommend_destinations / generate_itinerary`。
+5. `ToolRegistry` 执行工具并处理超时/异常兜底。
+6. 返回 `actionType + message + tripId` 等字段给前端驱动页面跳转。
+
+### 备注
+
+- 当前尚未实现 token 级流式输出，如需实时打字效果可新增 SSE 接口并改造前端消费。
+
+## 当前业务流程与调用链
+
+### 页面流程
+
+```mermaid
+flowchart TD
+    A[Welcome / Login / Register] --> B{hasProfile}
+    B -- 否 --> C[ProfileSetup]
+    B -- 是 --> D[PlanIntent]
+    C --> D
+
+    D --> E{Agent actionType}
+    E -- chat --> D
+    E -- recommend --> F[Destinations]
+    E -- generate --> G[ItineraryProgress]
+    E -- complete --> D
+
+    F --> H[选择目的地并生成]
+    H --> G
+    G --> I{Trip status}
+    I -- planning/generating --> G
+    I -- completed --> J[ItineraryOverview]
+    I -- failed --> G
+```
+
+### 关键调用链（一次“聊天 -> 推荐 -> 生成”）
+
+1. `PlanIntent.vue` 发送 `POST /api/agent/chat`（`text/plain`）。
+2. `AgentController` 调用 `UnifiedReActAgent.execute`，内部执行：
+   `StructuredIntentExtractor -> IntentRouter -> ToolRegistry`。
+3. 当 `actionType=recommend`，前端跳转 `Destinations.vue`，并在 `onMounted` 调用 `POST /api/ai/destinations/recommend`。
+4. 推荐服务链路：
+   `AIController -> DestinationsServiceImpl -> RecommendationServiceImpl -> RecommendationGraph`。
+5. 用户选中目的地后调用 `POST /api/trips/generate`。
+6. 行程生成链路：
+   `TripsController -> ItineraryGenerationServiceImpl.generateItineraryAsync -> StateMachineItineraryService -> TravelPlanningGraph`。
+7. `ItineraryProgress.vue` 每 2 秒轮询 `GET /api/trips/{tripId}/status`，读取 `status/progress/currentStep`。
+
+### 当前实现说明
+
+- 推荐流程是两段式触发：Agent 返回 `recommend` 后，Destinations 页面会再发起一次推荐请求（通常命中缓存）。
+- 进度主读 Redis key：`trip:generation:{tripId}`。
+- 状态机内部仍写历史 key：`itinerary:progress:{tripId}`（双轨兼容）。
+
 ## 项目结构
 
 ```
@@ -163,8 +265,8 @@ backend/    # Spring Boot 服务 + LangGraph Agent 核心
 │   ├── generator/       # 代码生成工具
 │   └── monitoring/      # 监控指标服务
 └── src/main/resources/
-    ├── application.yml.example  # 配置模板
-    ├── application.yml          # 应用配置（需自行创建）
+    ├── application.yml.example  # 配置模板（推荐）
+    ├── application.yml          # 本地/开发配置（如已存在，请避免提交敏感信息）
     └── mapper/                  # MyBatis XML 映射
 
 frontend/   # Vue 3 客户端
@@ -219,7 +321,7 @@ docker-compose up -d  # 启动 PostgreSQL、Redis、Chroma
 ```bash
 cd backend
 mvn clean install
-mvn spring-boot:run   # 服务运行于 http://localhost:8080
+mvn spring-boot:run   # 服务运行于 http://localhost:8081
 ```
 
 **3. 启动前端应用**
@@ -235,18 +337,10 @@ npm run dev           # 应用运行于 http://localhost:5173
 psql -U postgres -d travel_agent -f infra/setup_postgres.sql
 
 # 导入旅行知识库到 Chroma 向量库
-curl -X POST http://localhost:8080/api/knowledge/import
-```
+curl -X POST http://localhost:8081/api/knowledge/import
 
-**5. 启动监控服务（可选）**
-```bash
-cd infra/docker
-docker compose -f docker-compose-monitoring.yml up -d
-
-# 访问监控平台
-# Prometheus: http://localhost:9090
-# Grafana: http://localhost:3000 (账号: admin / admin)
-# Alertmanager: http://localhost:9093
+# （可选）导入单个文档，例如 tokyo_guide.md
+curl -X POST http://localhost:8081/api/knowledge/import/tokyo
 ```
 
 ## 前端页面展示
@@ -257,73 +351,9 @@ docker compose -f docker-compose-monitoring.yml up -d
 ### 说明
 
 - 性能受模型提供商、网络延迟、知识库规模与缓存命中率影响较大。
-- 本项目已内置 Micrometer 指标，可通过 Prometheus/Grafana 按环境实时观测：
-  - Agent 执行耗时与成功率
-  - LLM 调用耗时与 Token 消耗
-  - RAG 检索耗时与相似度分布
-  - Redis 缓存命中/未命中
-
-## 监控系统
-
-### 监控架构
-
-```
-应用程序 (Spring Boot)
-    ↓ 暴露 /actuator/prometheus
-Prometheus (时序数据库)
-    ↓ 数据源
-Grafana (可视化)
-    ↓ 告警
-Alertmanager (通知)
-```
-
-### 核心监控指标
-
-#### Agent 指标
-- `agent.execution.total` - Agent 执行总次数
-- `agent.execution.success` - 执行成功次数
-- `agent.execution.duration` - 执行耗时（P50/P95/P99）
-- `agent.execution.concurrent` - 当前并发数
-
-#### LLM 指标
-- `llm.call.total` - LLM 调用总次数
-- `llm.call.duration` - 调用耗时
-- `llm.tokens.prompt` - Prompt Token 消耗
-- `llm.tokens.completion` - Completion Token 消耗
-
-#### 缓存指标（新增）
-- `cache.hit` - 缓存命中次数
-- `cache.miss` - 缓存未命中次数
-- `cache.operation.duration` - 缓存操作耗时
-
-#### RAG 指标
-- `rag.search.total` - RAG 检索次数
-- `rag.search.duration` - 检索耗时
-- `rag.similarity.score` - 相似度分数分布
-
-#### 系统指标
-- `jvm.memory.used` - JVM 内存使用
-- `system.cpu.usage` - CPU 使用率
-- `http.server.requests` - HTTP 请求统计
-
-### 访问监控平台
-
-- **Prometheus**: http://localhost:9090
-- **Grafana**: http://localhost:3000 (admin / admin)
-- **Alertmanager**: http://localhost:9093
-
-### 查询示例
-
-```promql
-# 缓存命中率
-sum(rate(cache_hit_total[5m])) / (sum(rate(cache_hit_total[5m])) + sum(rate(cache_miss_total[5m])))
-
-# Agent 执行成功率
-sum(rate(agent_execution_success[5m])) / sum(rate(agent_execution_total[5m]))
-
-# LLM 平均响应时间
-rate(llm_call_duration_seconds_sum[5m]) / rate(llm_call_duration_seconds_count[5m])
-```
+- 推荐链路性能主要受 `RecommendationGraph` 的 AI 调用耗时影响。
+- 行程链路性能主要受 `TravelPlanningGraph` + 后台地理编码/路线优化影响。
+- 建议优先优化：缓存命中率、AI 调用并发策略、路线优化触发阈值。
 
 ## 配置说明
 
@@ -335,7 +365,7 @@ rate(llm_call_duration_seconds_sum[5m]) / rate(llm_call_duration_seconds_count[5
    cp application.yml.example application.yml
    ```
 
-2. **编辑 `application.yml` 并填入你的 API Keys**
+2. **编辑 `application.yml`（或环境变量）并填入你的 API Keys**
    ```yaml
    # AI 模型配置（必需）
    gemini.api-key: YOUR_GEMINI_API_KEY      # 从 https://aistudio.google.com/app/apikey 获取
@@ -363,14 +393,15 @@ rate(llm_call_duration_seconds_sum[5m]) / rate(llm_call_duration_seconds_count[5
    
    编辑 `frontend/.env` 并填入你的 API Keys：
    ```env
-   VITE_API_BASE_URL=http://localhost:8080
+   VITE_API_BASE_URL=http://localhost:8081/api
    VITE_GEOAPIFY_API_KEY=your_geoapify_api_key    # 从 https://www.geoapify.com/ 获取
    VITE_MAPBOX_TOKEN=your_mapbox_token            # 从 https://account.mapbox.com/ 获取（可选）
    ```
 
 **注意事项**
 
-- 所有 API Keys 都需要自行申请并填入配置文件
+- 所有 API Keys 都需要自行申请，严禁明文提交到 Git 仓库
+- 推荐优先使用环境变量注入敏感信息（如 `${OPENAI_API_KEY}`）
 
 ## 贡献指南
 

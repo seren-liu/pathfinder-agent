@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT NOT NULL,
     travel_style VARCHAR(50) CHECK (travel_style IN ('family', 'solo', 'couple', 'business')),
-    interests JSONB,
+    interests TEXT,
     budget_preference SMALLINT DEFAULT 2 CHECK (budget_preference BETWEEN 1 AND 3),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -209,6 +209,38 @@ CREATE INDEX IF NOT EXISTS idx_ai_recommendations_user_session ON ai_recommendat
 CREATE INDEX IF NOT EXISTS idx_ai_recommendations_intent ON ai_recommendations(intent_hash);
 CREATE INDEX IF NOT EXISTS idx_ai_recommendations_created ON ai_recommendations(created_at);
 
+-- Chat sessions table
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id VARCHAR(128) PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    title VARCHAR(120) NOT NULL DEFAULT 'New conversation',
+    last_message TEXT NOT NULL DEFAULT '',
+    message_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+COMMENT ON TABLE chat_sessions IS 'Cross-device synchronized chat sessions';
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_updated
+    ON chat_sessions (user_id, updated_at DESC);
+
+-- Chat session messages table
+CREATE TABLE IF NOT EXISTS chat_session_messages (
+    id BIGSERIAL PRIMARY KEY,
+    session_id VARCHAR(128) NOT NULL,
+    user_id BIGINT NOT NULL,
+    role VARCHAR(32) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+    content TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+COMMENT ON TABLE chat_session_messages IS 'Messages in chat sessions';
+CREATE INDEX IF NOT EXISTS idx_chat_session_messages_session_created
+    ON chat_session_messages (session_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_chat_session_messages_user_session
+    ON chat_session_messages (user_id, session_id);
+
 -- ============================================================
 -- Additional Feature Tables
 -- ============================================================
@@ -289,7 +321,7 @@ INSERT INTO destinations (name, country, state, description, budget_level, latit
 ('Melbourne', 'Australia', 'Victoria', 'Cultural capital with great coffee, art scene and laneways', 3, -37.8136276, 144.9630576, 'Spring/Autumn', 'Australia/Melbourne'),
 ('Gold Coast', 'Australia', 'Queensland', 'Famous beaches, surfing and theme parks', 2, -28.0167, 153.4000, 'Year-round', 'Australia/Brisbane'),
 ('Byron Bay', 'Australia', 'New South Wales', 'Relaxed beach town with great surfing and yoga', 2, -28.6474, 153.6020, 'Year-round', 'Australia/Sydney'),
-('Great Barrier Reef', 'Australia', 'Queensland', 'World''s largest coral reef system', 4, -18.2871, 147.6992, 'May-October', 'Australia/Brisbane'),
+('Great Barrier Reef', 'Australia', 'Queensland', 'World''s largest coral reef system', 3, -18.2871, 147.6992, 'May-October', 'Australia/Brisbane'),
 ('Tokyo', 'Japan', NULL, 'Vibrant metropolis blending tradition and modernity', 3, 35.6762, 139.6503, 'Spring/Autumn', 'Asia/Tokyo'),
 ('Kyoto', 'Japan', NULL, 'Ancient capital with temples, gardens and geishas', 2, 35.0116, 135.7681, 'Spring/Autumn', 'Asia/Tokyo'),
 ('Paris', 'France', NULL, 'City of Light with art, fashion and cuisine', 4, 48.8566, 2.3522, 'Spring/Autumn', 'Europe/Paris')
@@ -317,6 +349,7 @@ BEGIN
     RAISE NOTICE '  - destinations, destination_features';
     RAISE NOTICE '  - trips, itinerary_days, itinerary_items, itinerary_versions';
     RAISE NOTICE '  - conversation_history, ai_recommendations';
+    RAISE NOTICE '  - chat_sessions, chat_session_messages';
     RAISE NOTICE '  - checklists, checklist_items';
     RAISE NOTICE '  - trip_photos';
     RAISE NOTICE '============================================================';
